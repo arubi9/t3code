@@ -1,13 +1,68 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   getAppModelOptions,
+  getAppSettingsSnapshot,
   getSlashModelOptions,
   normalizeCustomModelSlugs,
   resolveAppServiceTier,
   shouldShowFastTierIcon,
   resolveAppModelSelection,
 } from "./appSettings";
+
+const APP_SETTINGS_STORAGE_KEY = "t3code:app-settings:v1";
+const originalWindow = globalThis.window;
+
+describe("getAppSettingsSnapshot", () => {
+  beforeEach(() => {
+    const storage = new Map<string, string>();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        localStorage: {
+          getItem: (key: string) => storage.get(key) ?? null,
+          setItem: (key: string, value: string) => {
+            storage.set(key, value);
+          },
+          clear: () => {
+            storage.clear();
+          },
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: originalWindow,
+    });
+  });
+
+  it("preserves legacy persisted settings when claude models are missing", () => {
+    window.localStorage.setItem(
+      APP_SETTINGS_STORAGE_KEY,
+      JSON.stringify({
+        codexBinaryPath: "/usr/local/bin/codex",
+        codexHomePath: "/Users/test/.codex",
+        confirmThreadDelete: false,
+        enableAssistantStreaming: true,
+        codexServiceTier: "fast",
+        customCodexModels: ["custom/internal-model"],
+      }),
+    );
+
+    expect(getAppSettingsSnapshot()).toMatchObject({
+      codexBinaryPath: "/usr/local/bin/codex",
+      codexHomePath: "/Users/test/.codex",
+      confirmThreadDelete: false,
+      enableAssistantStreaming: true,
+      codexServiceTier: "fast",
+      customCodexModels: ["custom/internal-model"],
+      customClaudeModels: [],
+    });
+  });
+});
 
 describe("normalizeCustomModelSlugs", () => {
   it("normalizes aliases, removes built-ins, and deduplicates values", () => {

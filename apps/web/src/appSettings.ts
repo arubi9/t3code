@@ -30,6 +30,10 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
   claude: new Set(getModelOptions("claude").map((option) => option.slug)),
 };
+const CustomModelListSchema = Schema.Array(Schema.String).pipe(
+  Schema.withDecodingDefaultKey(() => []),
+  Schema.withConstructorDefault(() => Option.some([])),
+);
 
 const AppSettingsSchema = Schema.Struct({
   codexBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(
@@ -43,12 +47,8 @@ const AppSettingsSchema = Schema.Struct({
     Schema.withConstructorDefault(() => Option.some(false)),
   ),
   codexServiceTier: AppServiceTierSchema.pipe(Schema.withConstructorDefault(() => Option.some("auto"))),
-  customCodexModels: Schema.Array(Schema.String).pipe(
-    Schema.withConstructorDefault(() => Option.some([])),
-  ),
-  customClaudeModels: Schema.Array(Schema.String).pipe(
-    Schema.withConstructorDefault(() => Option.some([])),
-  ),
+  customCodexModels: CustomModelListSchema,
+  customClaudeModels: CustomModelListSchema,
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
 export interface AppModelOption {

@@ -69,10 +69,10 @@ function getCustomModelsForProvider(
 ) {
   switch (provider) {
     case "claude":
-      return settings.customClaudeModels;
+      return settings.customClaudeModels ?? [];
     case "codex":
     default:
-      return settings.customCodexModels;
+      return settings.customCodexModels ?? [];
   }
 }
 
@@ -82,10 +82,10 @@ function getDefaultCustomModelsForProvider(
 ) {
   switch (provider) {
     case "claude":
-      return defaults.customClaudeModels;
+      return defaults.customClaudeModels ?? [];
     case "codex":
     default:
-      return defaults.customCodexModels;
+      return defaults.customCodexModels ?? [];
   }
 }
 

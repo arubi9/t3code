@@ -299,15 +299,18 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
       }) =>
         Effect.gen(function* () {
           const state = yield* getSessionState(input.threadId);
-          state.currentTurn = null;
-          state.session = {
-            ...state.session,
-            status: input.state === "failed" ? "error" : "ready",
-            activeTurnId: undefined,
-            updatedAt: nowIso(),
-            ...(input.errorMessage ? { lastError: input.errorMessage } : {}),
-          };
-          sessions.set(input.threadId, state);
+          const isCurrentTurn = state.currentTurn?.turnId === input.turnId;
+          if (isCurrentTurn) {
+            state.currentTurn = null;
+            state.session = {
+              ...state.session,
+              status: input.state === "failed" ? "error" : "ready",
+              activeTurnId: undefined,
+              updatedAt: nowIso(),
+              ...(input.errorMessage ? { lastError: input.errorMessage } : {}),
+            };
+            sessions.set(input.threadId, state);
+          }
 
           yield* publish({
             ...buildBaseEvent({
@@ -336,17 +339,19 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
             },
           });
 
-          yield* publish({
-            ...buildBaseEvent({
-              threadId: input.threadId,
-              raw: buildRaw({ state: state.session.status }, "session/state"),
-            }),
-            type: "session.state.changed",
-            payload: {
-              state: input.state === "failed" ? "error" : "ready",
-              ...(input.errorMessage ? { reason: input.errorMessage } : {}),
-            },
-          });
+          if (isCurrentTurn) {
+            yield* publish({
+              ...buildBaseEvent({
+                threadId: input.threadId,
+                raw: buildRaw({ state: state.session.status }, "session/state"),
+              }),
+              type: "session.state.changed",
+              payload: {
+                state: input.state === "failed" ? "error" : "ready",
+                ...(input.errorMessage ? { reason: input.errorMessage } : {}),
+              },
+            });
+          }
         });
 
       const startSession: ClaudeAdapterShape["startSession"] = (input) =>
@@ -758,7 +763,7 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
           child.once("exit", (code, signal) => {
             if (turnState.completed) {
               const current = sessions.get(input.threadId);
-              if (current) {
+              if (current?.session.resumeCursor === sessionId) {
                 current.hasConversation = true;
                 sessions.set(input.threadId, current);
               }

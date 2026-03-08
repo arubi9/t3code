@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 
 import {
+  ApprovalRequestId,
+  type CanonicalRequestType,
   type CanonicalItemType,
   EventId,
   ProviderItemId,
@@ -19,7 +21,6 @@ import {
   ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
-  type ProviderAdapterError,
 } from "../Errors.ts";
 import type { ProviderThreadSnapshot } from "../Services/ProviderAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
@@ -52,6 +53,26 @@ interface ClaudeSessionState {
   readonly binaryPath: string;
   hasConversation: boolean;
   currentTurn: ClaudeTurnState | null;
+}
+
+interface ClaudeThreadTurnSnapshotState {
+  readonly id: TurnId;
+  readonly items: Array<unknown>;
+}
+
+interface ClaudeThreadSnapshotState {
+  readonly threadId: ThreadId;
+  turns: Array<ClaudeThreadTurnSnapshotState>;
+}
+
+function cloneThreadSnapshot(state: ClaudeThreadSnapshotState): ProviderThreadSnapshot {
+  return {
+    threadId: state.threadId,
+    turns: state.turns.map((turn) => ({
+      id: turn.id,
+      items: [...turn.items],
+    })),
+  };
 }
 
 function nowIso(): string {
@@ -193,6 +214,30 @@ function toolDetail(name: string, input: unknown): string | undefined {
   return detail ?? coerceDetail(input);
 }
 
+function requestTypeForClaudeTool(name: string): CanonicalRequestType {
+  const normalized = name.trim().toLowerCase();
+  if (normalized === "bash") {
+    return "command_execution_approval";
+  }
+  if (
+    normalized === "edit" ||
+    normalized === "write" ||
+    normalized === "multiedit" ||
+    normalized === "notebookedit"
+  ) {
+    return "file_change_approval";
+  }
+  if (
+    normalized === "read" ||
+    normalized === "glob" ||
+    normalized === "grep" ||
+    normalized === "ls"
+  ) {
+    return "file_read_approval";
+  }
+  return "unknown";
+}
+
 function buildRaw(record: unknown, method: string): ProviderRuntimeEvent["raw"] {
   return {
     source: "claude.cli",
@@ -230,7 +275,10 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
             })
           : undefined);
 
+      const runtimeServices = yield* Effect.services<never>();
+      const runPromise = Effect.runPromiseWith(runtimeServices);
       const sessions = new Map<ThreadId, ClaudeSessionState>();
+      const threadSnapshots = new Map<ThreadId, ClaudeThreadSnapshotState>();
       const eventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
 
       const publish = (event: ProviderRuntimeEvent) =>
@@ -241,8 +289,12 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
           yield* Queue.offer(eventQueue, event).pipe(Effect.asVoid);
         });
 
+      const runBackgroundEffect = <TSuccess>(effect: Effect.Effect<TSuccess>) => {
+        void runPromise(effect);
+      };
+
       const publishFork = (event: ProviderRuntimeEvent) => {
-        void Effect.runFork(publish(event));
+        runBackgroundEffect(publish(event));
       };
 
       const getSessionState = (threadId: ThreadId) => {
@@ -256,6 +308,37 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
           );
         }
         return Effect.succeed(state);
+      };
+
+      const ensureThreadSnapshot = (threadId: ThreadId): ClaudeThreadSnapshotState => {
+        const existing = threadSnapshots.get(threadId);
+        if (existing) {
+          return existing;
+        }
+        const created: ClaudeThreadSnapshotState = {
+          threadId,
+          turns: [],
+        };
+        threadSnapshots.set(threadId, created);
+        return created;
+      };
+
+      const createTurnSnapshot = (threadId: ThreadId, turnId: TurnId) => {
+        const snapshot = ensureThreadSnapshot(threadId);
+        const existing = snapshot.turns.find((turn) => turn.id === turnId);
+        if (existing) {
+          return existing;
+        }
+        const created: ClaudeThreadTurnSnapshotState = {
+          id: turnId,
+          items: [],
+        };
+        snapshot.turns.push(created);
+        return created;
+      };
+
+      const appendTurnSnapshotItem = (threadId: ThreadId, turnId: TurnId, item: unknown) => {
+        createTurnSnapshot(threadId, turnId).items.push(item);
       };
 
       const emitSessionReady = (state: ClaudeSessionState) =>
@@ -302,15 +385,26 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
           const isCurrentTurn = state.currentTurn?.turnId === input.turnId;
           if (isCurrentTurn) {
             state.currentTurn = null;
+            const { lastError: _lastError, activeTurnId: _activeTurnId, ...sessionBase } =
+              state.session;
             state.session = {
-              ...state.session,
+              ...sessionBase,
               status: input.state === "failed" ? "error" : "ready",
-              activeTurnId: undefined,
               updatedAt: nowIso(),
               ...(input.errorMessage ? { lastError: input.errorMessage } : {}),
             };
             sessions.set(input.threadId, state);
           }
+
+          appendTurnSnapshotItem(input.threadId, input.turnId, {
+            kind: "turn.completed",
+            state: input.state,
+            ...(input.stopReason !== undefined ? { stopReason: input.stopReason } : {}),
+            ...(input.usage !== undefined ? { usage: input.usage } : {}),
+            ...(input.modelUsage !== undefined ? { modelUsage: input.modelUsage } : {}),
+            ...(input.totalCostUsd !== undefined ? { totalCostUsd: input.totalCostUsd } : {}),
+            ...(input.errorMessage ? { errorMessage: input.errorMessage } : {}),
+          });
 
           yield* publish({
             ...buildBaseEvent({
@@ -391,6 +485,7 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
             currentTurn: null,
           };
           sessions.set(input.threadId, nextState);
+          ensureThreadSnapshot(input.threadId);
           yield* emitSessionReady(nextState);
           return session;
         });
@@ -477,6 +572,12 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
             resumeCursor: sessionId,
           };
           sessions.set(input.threadId, state);
+          appendTurnSnapshotItem(input.threadId, turnId, {
+            kind: "turn.started",
+            ...(model ? { model } : {}),
+            ...(input.input ? { input: input.input } : {}),
+            interactionMode: input.interactionMode ?? null,
+          });
 
           yield* publish({
             ...buildBaseEvent({
@@ -525,6 +626,12 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
                 const delta = asRecord(event?.delta);
                 const deltaType = asString(delta?.type);
                 if (deltaType === "text_delta" && turnState.assistantItemId) {
+                  appendTurnSnapshotItem(input.threadId, turnId, {
+                    kind: "content.delta",
+                    itemId: turnState.assistantItemId,
+                    streamKind: "assistant_text",
+                    delta: asString(delta?.text) ?? "",
+                  });
                   publishFork({
                     ...buildBaseEvent({
                       threadId: input.threadId,
@@ -555,6 +662,11 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
                 if (contentType === "thinking") {
                   const thinking = asString(contentBlock?.thinking);
                   if (thinking) {
+                    appendTurnSnapshotItem(input.threadId, turnId, {
+                      kind: "task.progress",
+                      taskId: `claude-thinking:${turnId}`,
+                      description: thinking,
+                    });
                     publishFork({
                       ...buildBaseEvent({
                         threadId: input.threadId,
@@ -584,6 +696,16 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
                     title: toolTitle(toolName),
                   };
                   turnState.toolStates.set(toolId, nextToolState);
+                  appendTurnSnapshotItem(input.threadId, turnId, {
+                    kind: "item.started",
+                    itemId,
+                    itemType: nextToolState.itemType,
+                    title: nextToolState.title,
+                    ...(toolDetail(toolName, contentBlock?.input)
+                      ? { detail: toolDetail(toolName, contentBlock?.input) }
+                      : {}),
+                    data: contentBlock,
+                  });
                   publishFork({
                     ...buildBaseEvent({
                       threadId: input.threadId,
@@ -611,6 +733,15 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
                     ? ProviderItemId.makeUnsafe(messageId)
                     : turnState.assistantItemId;
                   if (text && itemId) {
+                    appendTurnSnapshotItem(input.threadId, turnId, {
+                      kind: "item.completed",
+                      itemId,
+                      itemType: "assistant_message",
+                      status: "completed",
+                      title: "Assistant message",
+                      detail: text,
+                      data: contentBlock,
+                    });
                     publishFork({
                       ...buildBaseEvent({
                         threadId: input.threadId,
@@ -647,6 +778,17 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
                 }
                 const toolState = turnState.toolStates.get(toolUseId);
                 const itemId = toolState?.itemId ?? ProviderItemId.makeUnsafe(toolUseId);
+                appendTurnSnapshotItem(input.threadId, turnId, {
+                  kind: "item.completed",
+                  itemId,
+                  itemType: toolState?.itemType ?? "dynamic_tool_call",
+                  status: contentBlock?.is_error === true ? "failed" : "completed",
+                  title: toolState?.title ?? "Tool call",
+                  ...(coerceDetail(contentBlock?.content)
+                    ? { detail: coerceDetail(contentBlock?.content) }
+                    : {}),
+                  data: contentBlock,
+                });
                 publishFork({
                   ...buildBaseEvent({
                     threadId: input.threadId,
@@ -686,7 +828,7 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
                 (record.subtype === "success" ? "end_turn" : asString(record.subtype)) ??
                 null;
 
-              void Effect.runFork(
+              runBackgroundEffect(
                 finalizeTurn({
                   threadId: input.threadId,
                   turnId,
@@ -778,7 +920,7 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
                   ? stderrBuffer.trim()
                   : `Claude Code exited unexpectedly (code=${code ?? "null"}, signal=${signal ?? "null"}).`;
 
-            void Effect.runFork(
+            runBackgroundEffect(
               finalizeTurn({
                 threadId: input.threadId,
                 turnId,
@@ -814,9 +956,13 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
 
       const stopSession: ClaudeAdapterShape["stopSession"] = (threadId) =>
         Effect.gen(function* () {
-          const state = yield* getSessionState(threadId);
+          const state = sessions.get(threadId);
+          if (!state) {
+            return;
+          }
           if (state.currentTurn) {
             state.currentTurn.interrupted = true;
+            state.currentTurn.completed = true;
             state.currentTurn.child.kill("SIGTERM");
           }
           sessions.delete(threadId);
@@ -838,10 +984,103 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
       const unsupportedRequest = (method: string, detail: string) =>
         Effect.fail(toRequestError(method, detail));
 
+      const readThread: ClaudeAdapterShape["readThread"] = (threadId) =>
+        Effect.gen(function* () {
+          const snapshot = threadSnapshots.get(threadId);
+          if (snapshot) {
+            return cloneThreadSnapshot(snapshot);
+          }
+          if (sessions.has(threadId)) {
+            return cloneThreadSnapshot(ensureThreadSnapshot(threadId));
+          }
+          return yield* new ProviderAdapterSessionNotFoundError({
+            provider: PROVIDER,
+            threadId,
+          });
+        });
+
+      const rollbackThread: ClaudeAdapterShape["rollbackThread"] = (threadId, numTurns) =>
+        Effect.gen(function* () {
+          if (!Number.isInteger(numTurns) || numTurns < 1) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "ClaudeAdapter.rollbackThread",
+              issue: "numTurns must be an integer >= 1.",
+            });
+          }
+
+          const snapshot = threadSnapshots.get(threadId);
+          if (!snapshot && !sessions.has(threadId)) {
+            return yield* new ProviderAdapterSessionNotFoundError({
+              provider: PROVIDER,
+              threadId,
+            });
+          }
+
+          const nextSnapshot =
+            snapshot ??
+            ({
+              threadId,
+              turns: [],
+            } satisfies ClaudeThreadSnapshotState);
+          nextSnapshot.turns = nextSnapshot.turns.slice(
+            0,
+            Math.max(0, nextSnapshot.turns.length - numTurns),
+          );
+          threadSnapshots.set(threadId, nextSnapshot);
+
+          const state = sessions.get(threadId);
+          if (state) {
+            if (state.currentTurn) {
+              state.currentTurn.interrupted = true;
+              state.currentTurn.completed = true;
+              state.currentTurn.child.kill("SIGTERM");
+              state.currentTurn = null;
+            }
+
+            const { activeTurnId: _activeTurnId, lastError: _lastError, ...sessionBase } =
+              state.session;
+            state.hasConversation = false;
+            state.session = {
+              ...sessionBase,
+              status: "ready",
+              updatedAt: nowIso(),
+              resumeCursor: crypto.randomUUID(),
+            };
+            sessions.set(threadId, state);
+
+            yield* publish({
+              ...buildBaseEvent({
+                threadId,
+                raw: buildRaw(
+                  {
+                    detail:
+                      "Claude conversation context was reset after rollback because Claude Code cannot rewind provider history.",
+                    numTurns,
+                  },
+                  "thread/rollback",
+                ),
+              }),
+              type: "runtime.warning",
+              payload: {
+                message:
+                  "Claude rollback reset the provider conversation. Earlier thread state remains in T3 history only.",
+              },
+            });
+          }
+
+          return cloneThreadSnapshot(nextSnapshot);
+        });
+
       return {
         provider: PROVIDER,
         capabilities: {
           sessionModelSwitch: "in-session",
+          approvals: false,
+          structuredUserInput: false,
+          providerHistoryRead: true,
+          providerRollback: false,
+          attachments: false,
         },
         startSession,
         sendTurn,
@@ -859,19 +1098,8 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
         stopSession,
         listSessions: () => Effect.sync(() => [...sessions.values()].map((state) => state.session)),
         hasSession: (threadId) => Effect.sync(() => sessions.has(threadId)),
-        readThread: (threadId) =>
-          Effect.sync(
-            () =>
-              ({
-                threadId,
-                turns: [],
-              }) satisfies ProviderThreadSnapshot,
-          ),
-        rollbackThread: (threadId) =>
-          unsupportedRequest(
-            "claude.rollbackThread",
-            `Claude Code CLI does not support rolling back thread '${threadId}'.`,
-          ) as Effect.Effect<ProviderThreadSnapshot, ProviderAdapterError>,
+        readThread,
+        rollbackThread,
         stopAll,
         streamEvents: Stream.fromQueue(eventQueue),
       } satisfies ClaudeAdapterShape;

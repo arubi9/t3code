@@ -3,6 +3,7 @@ import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas";
 import { KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
 import { ProviderKind } from "./orchestration";
+import { ProviderCapabilities } from "./provider";
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
@@ -40,6 +41,7 @@ export const ServerProviderStatus = Schema.Struct({
   authStatus: ServerProviderAuthStatus,
   checkedAt: IsoDateTime,
   message: Schema.optional(TrimmedNonEmptyString),
+  capabilities: Schema.optional(ProviderCapabilities),
 });
 export type ServerProviderStatus = typeof ServerProviderStatus.Type;
 

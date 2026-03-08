@@ -26,8 +26,10 @@ import {
   WebSocketRequest,
   WsPush,
   WsResponse,
+  type ServerProviderStatus,
 } from "@t3tools/contracts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import { resolveProviderCapabilities } from "@t3tools/shared/provider";
 import {
   Cause,
   Effect,
@@ -253,6 +255,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const gitManager = yield* GitManager;
   const terminalManager = yield* TerminalManager;
   const keybindingsManager = yield* Keybindings;
+  const providerService = yield* ProviderService;
   const providerHealth = yield* ProviderHealth;
   const git = yield* GitCore;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -268,7 +271,28 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     ),
   );
 
-  const providerStatuses = yield* providerHealth.getStatuses;
+  const enrichProviderStatus = (
+    status: ServerProviderStatus,
+  ): Effect.Effect<ServerProviderStatus, never, ProviderService> =>
+    providerService.getCapabilities(status.provider).pipe(
+      Effect.map(
+        (capabilities): ServerProviderStatus => ({
+          ...status,
+          capabilities: resolveProviderCapabilities(status.provider, capabilities),
+        }),
+      ),
+      Effect.catch(
+        (): Effect.Effect<ServerProviderStatus> =>
+          Effect.succeed({
+            ...status,
+            capabilities: resolveProviderCapabilities(status.provider),
+          }),
+      ),
+    );
+
+  const providerStatuses = yield* providerHealth.getStatuses.pipe(
+    Effect.flatMap((statuses) => Effect.forEach(statuses, enrichProviderStatus)),
+  );
 
   const clients = yield* Ref.make(new Set<WebSocket>());
   const logger = createLogger("ws");

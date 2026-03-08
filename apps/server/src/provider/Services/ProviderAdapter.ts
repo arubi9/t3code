@@ -9,8 +9,10 @@
  */
 import type {
   ApprovalRequestId,
+  ProviderCapabilities,
   ProviderApprovalDecision,
   ProviderKind,
+  ProviderSessionModelSwitchMode,
   ProviderUserInputAnswers,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
@@ -23,13 +25,16 @@ import type {
 import type { Effect } from "effect";
 import type { Stream } from "effect";
 
-export type ProviderSessionModelSwitchMode = "in-session" | "restart-session" | "unsupported";
-
 export interface ProviderAdapterCapabilities {
   /**
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+  readonly approvals?: ProviderCapabilities["approvals"];
+  readonly structuredUserInput?: ProviderCapabilities["structuredUserInput"];
+  readonly providerHistoryRead?: ProviderCapabilities["providerHistoryRead"];
+  readonly providerRollback?: ProviderCapabilities["providerRollback"];
+  readonly attachments?: ProviderCapabilities["attachments"];
 }
 
 export interface ProviderThreadTurnSnapshot {

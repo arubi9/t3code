@@ -29,6 +29,7 @@ import {
   normalizeModelSlug,
   resolveModelSlugForProvider,
 } from "@t3tools/shared/model";
+import { resolveProviderCapabilities } from "@t3tools/shared/provider";
 import {
   memo,
   useCallback,
@@ -265,6 +266,18 @@ const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
 const WORKTREE_BRANCH_PREFIX = "t3code";
+
+function providerDisplayLabel(provider: ProviderKind): string {
+  return provider === "claude" ? "Claude Code" : "Codex";
+}
+
+function attachmentsUnsupportedMessage(provider: ProviderKind): string {
+  return `${providerDisplayLabel(provider)} does not support image attachments in T3 yet.`;
+}
+
+function supervisedModeUnsupportedMessage(provider: ProviderKind): string {
+  return `${providerDisplayLabel(provider)} does not support supervised approval mode in T3 yet.`;
+}
 
 function readLastInvokedScriptByProjectFromStorage(): Record<string, string> {
   const stored = localStorage.getItem(LAST_INVOKED_SCRIPT_BY_PROJECT_KEY);
@@ -1274,6 +1287,28 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const availableEditors = serverConfigQuery.data?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
   const providerStatuses = serverConfigQuery.data?.providers ?? EMPTY_PROVIDER_STATUSES;
   const activeProvider = activeThread?.session?.provider ?? "codex";
+  const providerCapabilitiesByProvider = useMemo(
+    () =>
+      new Map(
+        providerStatuses.map((status) => [
+          status.provider,
+          resolveProviderCapabilities(status.provider, status.capabilities),
+        ]),
+      ),
+    [providerStatuses],
+  );
+  const selectedProviderCapabilities = useMemo(
+    () =>
+      providerCapabilitiesByProvider.get(selectedProvider) ??
+      resolveProviderCapabilities(selectedProvider),
+    [providerCapabilitiesByProvider, selectedProvider],
+  );
+  const activeProviderCapabilities = useMemo(
+    () =>
+      providerCapabilitiesByProvider.get(activeProvider) ??
+      resolveProviderCapabilities(activeProvider),
+    [activeProvider, providerCapabilitiesByProvider],
+  );
   const activeProviderStatus = useMemo(
     () => providerStatuses.find((status) => status.provider === activeProvider) ?? null,
     [activeProvider, providerStatuses],
@@ -2253,6 +2288,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
 
   const addComposerImages = (files: File[]) => {
     if (!activeThreadId || files.length === 0) return;
+    if (!selectedProviderCapabilities.attachments) {
+      setThreadError(activeThreadId, attachmentsUnsupportedMessage(selectedProvider));
+      return;
+    }
 
     const nextImages: ComposerImageAttachment[] = [];
     let nextImageCount = composerImagesRef.current.length;
@@ -2449,6 +2488,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
         threadIdForSend,
         "Select a base branch before sending in New worktree mode.",
       );
+      return;
+    }
+    if (composerImages.length > 0 && !selectedProviderCapabilities.attachments) {
+      setStoreThreadError(threadIdForSend, attachmentsUnsupportedMessage(selectedProvider));
       return;
     }
 
@@ -3064,19 +3107,32 @@ export default function ChatView({ threadId }: ChatViewProps) {
         scheduleComposerFocus();
         return;
       }
+      const nextProviderCapabilities =
+        providerCapabilitiesByProvider.get(provider) ?? resolveProviderCapabilities(provider);
       setComposerDraftProvider(activeThread.id, provider);
       setComposerDraftModel(
         activeThread.id,
         resolveAppModelSelection(provider, getCustomModelsForProvider(settings, provider), model),
       );
+      if (!nextProviderCapabilities.approvals && runtimeMode === "approval-required") {
+        setComposerDraftRuntimeMode(activeThread.id, "full-access");
+        if (isLocalDraftThread) {
+          setDraftThreadContext(activeThread.id, { runtimeMode: "full-access" });
+        }
+      }
       scheduleComposerFocus();
     },
     [
       activeThread,
+      isLocalDraftThread,
       lockedProvider,
+      providerCapabilitiesByProvider,
+      runtimeMode,
       scheduleComposerFocus,
       setComposerDraftModel,
       setComposerDraftProvider,
+      setComposerDraftRuntimeMode,
+      setDraftThreadContext,
       settings,
     ],
   );
@@ -3604,8 +3660,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
                     : showPlanFollowUpPrompt && activeProposedPlan
                       ? "Add feedback to refine the plan, or leave this blank to implement it"
                       : phase === "disconnected"
-                        ? "Ask for follow-up changes or attach images"
-                        : "Ask anything, @tag files/folders, or use /model"
+                        ? selectedProviderCapabilities.attachments
+                          ? "Ask for follow-up changes or attach images"
+                          : "Ask for follow-up changes"
+                        : selectedProviderCapabilities.attachments
+                          ? "Ask anything, @tag files/folders, or use /model"
+                          : "Ask anything, @tag files/folders, or use /model (images unavailable for this provider)"
                 }
                 disabled={isConnecting || isComposerApprovalState}
               />
@@ -3617,6 +3677,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
                 <ComposerPendingApprovalActions
                   requestId={activePendingApproval.requestId}
                   isResponding={respondingRequestIds.includes(activePendingApproval.requestId)}
+                  disabled={!activeProviderCapabilities.approvals}
+                  disabledReason={
+                    activeProviderCapabilities.approvals
+                      ? null
+                      : supervisedModeUnsupportedMessage(activeProvider)
+                  }
                   onRespondToApproval={onRespondToApproval}
                 />
               </div>
@@ -3677,15 +3743,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
                     className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
                     size="sm"
                     type="button"
+                    disabled={!selectedProviderCapabilities.approvals}
                     onClick={() =>
                       void handleRuntimeModeChange(
                         runtimeMode === "full-access" ? "approval-required" : "full-access",
                       )
                     }
                     title={
-                      runtimeMode === "full-access"
-                        ? "Full access — click to require approvals"
-                        : "Approval required — click for full access"
+                      selectedProviderCapabilities.approvals
+                        ? runtimeMode === "full-access"
+                          ? "Full access — click to require approvals"
+                          : "Approval required — click for full access"
+                        : supervisedModeUnsupportedMessage(selectedProvider)
                     }
                   >
                     {runtimeMode === "full-access" ? <LockOpenIcon /> : <LockIcon />}
@@ -4149,6 +4218,8 @@ const ComposerPendingApprovalPanel = memo(function ComposerPendingApprovalPanel(
 interface ComposerPendingApprovalActionsProps {
   requestId: ApprovalRequestId;
   isResponding: boolean;
+  disabled?: boolean;
+  disabledReason?: string | null;
   onRespondToApproval: (
     requestId: ApprovalRequestId,
     decision: ProviderApprovalDecision,
@@ -4158,14 +4229,18 @@ interface ComposerPendingApprovalActionsProps {
 const ComposerPendingApprovalActions = memo(function ComposerPendingApprovalActions({
   requestId,
   isResponding,
+  disabled = false,
+  disabledReason = null,
   onRespondToApproval,
 }: ComposerPendingApprovalActionsProps) {
+  const controlsDisabled = isResponding || disabled;
   return (
     <>
       <Button
         size="sm"
         variant="ghost"
-        disabled={isResponding}
+        disabled={controlsDisabled}
+        title={disabledReason ?? undefined}
         onClick={() => void onRespondToApproval(requestId, "cancel")}
       >
         Cancel turn
@@ -4173,7 +4248,8 @@ const ComposerPendingApprovalActions = memo(function ComposerPendingApprovalActi
       <Button
         size="sm"
         variant="destructive-outline"
-        disabled={isResponding}
+        disabled={controlsDisabled}
+        title={disabledReason ?? undefined}
         onClick={() => void onRespondToApproval(requestId, "decline")}
       >
         Decline
@@ -4181,7 +4257,8 @@ const ComposerPendingApprovalActions = memo(function ComposerPendingApprovalActi
       <Button
         size="sm"
         variant="outline"
-        disabled={isResponding}
+        disabled={controlsDisabled}
+        title={disabledReason ?? undefined}
         onClick={() => void onRespondToApproval(requestId, "acceptForSession")}
       >
         Always allow this session
@@ -4189,7 +4266,8 @@ const ComposerPendingApprovalActions = memo(function ComposerPendingApprovalActi
       <Button
         size="sm"
         variant="default"
-        disabled={isResponding}
+        disabled={controlsDisabled}
+        title={disabledReason ?? undefined}
         onClick={() => void onRespondToApproval(requestId, "accept")}
       >
         Approve once

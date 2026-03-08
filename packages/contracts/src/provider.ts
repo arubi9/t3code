@@ -33,6 +33,23 @@ const ProviderSessionStatus = Schema.Literals([
   "closed",
 ]);
 
+export const ProviderSessionModelSwitchMode = Schema.Literals([
+  "in-session",
+  "restart-session",
+  "unsupported",
+]);
+export type ProviderSessionModelSwitchMode = typeof ProviderSessionModelSwitchMode.Type;
+
+export const ProviderCapabilities = Schema.Struct({
+  sessionModelSwitch: ProviderSessionModelSwitchMode,
+  approvals: Schema.Boolean,
+  structuredUserInput: Schema.Boolean,
+  providerHistoryRead: Schema.Boolean,
+  providerRollback: Schema.Boolean,
+  attachments: Schema.Boolean,
+});
+export type ProviderCapabilities = typeof ProviderCapabilities.Type;
+
 export const ProviderSession = Schema.Struct({
   provider: ProviderKind,
   status: ProviderSessionStatus,

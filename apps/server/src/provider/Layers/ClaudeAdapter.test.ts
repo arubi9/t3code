@@ -192,4 +192,151 @@ claudeAdapterLayer("ClaudeAdapterLive lifecycle", (it) => {
       assert.equal(secondSpawn.args.includes("--resume"), false);
     }),
   );
+
+  it.effect("captures Claude turn history for readThread", () =>
+    Effect.gen(function* () {
+      mockState.spawnCalls.length = 0;
+      mockState.spawnMock.mockClear();
+
+      const adapter = yield* ClaudeAdapter;
+      const threadId = asThreadId("thread-read-history");
+
+      yield* adapter.startSession({
+        provider: "claude",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const startedTurn = yield* adapter.sendTurn({
+        threadId,
+        input: "history turn",
+        attachments: [],
+      });
+      const child = mockState.spawnCalls[0]?.child;
+      assert.ok(child);
+
+      child.stdout.write(
+        `${JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "message_start",
+            message: {
+              id: "msg-history",
+            },
+          },
+        })}\n`,
+      );
+      child.stdout.write(
+        `${JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: {
+              type: "text_delta",
+              text: "Hello",
+            },
+          },
+        })}\n`,
+      );
+      child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success" })}\n`);
+      yield* waitForAsyncEffects();
+
+      const snapshot = yield* adapter.readThread(threadId);
+      assert.equal(snapshot.threadId, threadId);
+      assert.equal(snapshot.turns.length, 1);
+      assert.equal(snapshot.turns[0]?.id, startedTurn.turnId);
+      assert.equal(snapshot.turns[0]?.items.length, 3);
+      assert.deepEqual(snapshot.turns[0]?.items[0], {
+        kind: "turn.started",
+        input: "history turn",
+        interactionMode: null,
+      });
+      assert.deepEqual(snapshot.turns[0]?.items[1], {
+        kind: "content.delta",
+        itemId: "msg-history",
+        streamKind: "assistant_text",
+        delta: "Hello",
+      });
+      assert.deepEqual(snapshot.turns[0]?.items[2], {
+        kind: "turn.completed",
+        state: "completed",
+        stopReason: "end_turn",
+      });
+    }),
+  );
+
+  it.effect("allows stopSession to be called repeatedly", () =>
+    Effect.gen(function* () {
+      mockState.spawnCalls.length = 0;
+      mockState.spawnMock.mockClear();
+
+      const adapter = yield* ClaudeAdapter;
+      const threadId = asThreadId("thread-stop-idempotent");
+
+      yield* adapter.startSession({
+        provider: "claude",
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.stopSession(threadId);
+      yield* adapter.stopSession(threadId);
+
+      const sessions = yield* adapter.listSessions();
+      assert.equal(sessions.some((session) => session.threadId === threadId), false);
+    }),
+  );
+
+  it.effect("resets Claude resume state after rollback", () =>
+    Effect.gen(function* () {
+      mockState.spawnCalls.length = 0;
+      mockState.spawnMock.mockClear();
+
+      const adapter = yield* ClaudeAdapter;
+      const threadId = asThreadId("thread-rollback-reset");
+
+      yield* adapter.startSession({
+        provider: "claude",
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId,
+        input: "first turn",
+        attachments: [],
+      });
+      const firstChild = mockState.spawnCalls[0]?.child;
+      assert.ok(firstChild);
+      firstChild.stdout.write(`${JSON.stringify({ type: "result", subtype: "success" })}\n`);
+      yield* waitForAsyncEffects();
+      firstChild.emitExit(0, null);
+
+      yield* adapter.sendTurn({
+        threadId,
+        input: "second turn",
+        attachments: [],
+      });
+      const secondSpawn = mockState.spawnCalls[1];
+      const secondChild = secondSpawn?.child;
+      assert.ok(secondSpawn);
+      assert.ok(secondChild);
+      assert.equal(secondSpawn.args.includes("--resume"), true);
+      secondChild.stdout.write(`${JSON.stringify({ type: "result", subtype: "success" })}\n`);
+      yield* waitForAsyncEffects();
+      secondChild.emitExit(0, null);
+
+      const rolledBack = yield* adapter.rollbackThread(threadId, 1);
+      assert.equal(rolledBack.turns.length, 1);
+
+      yield* adapter.sendTurn({
+        threadId,
+        input: "third turn",
+        attachments: [],
+      });
+      const thirdSpawn = mockState.spawnCalls[2];
+      assert.ok(thirdSpawn);
+      assert.equal(thirdSpawn.args.includes("--session-id"), true);
+      assert.equal(thirdSpawn.args.includes("--resume"), false);
+    }),
+  );
 });

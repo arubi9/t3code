@@ -71,6 +71,14 @@ const defaultProviders: ReadonlyArray<ServerProviderStatus> = [
     available: true,
     authStatus: "authenticated",
     checkedAt: "2026-01-01T00:00:00.000Z",
+    capabilities: {
+      sessionModelSwitch: "in-session",
+      approvals: true,
+      structuredUserInput: true,
+      providerHistoryRead: true,
+      providerRollback: true,
+      attachments: true,
+    },
   },
 ];
 

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 
+import { type ProviderRuntimeEvent, ThreadId } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ThreadId } from "@t3tools/contracts";
 import { it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Stream } from "effect";
 import { vi } from "vitest";
 
 const mockState = vi.hoisted(() => {
@@ -337,6 +337,70 @@ claudeAdapterLayer("ClaudeAdapterLive lifecycle", (it) => {
       assert.ok(thirdSpawn);
       assert.equal(thirdSpawn.args.includes("--session-id"), true);
       assert.equal(thirdSpawn.args.includes("--resume"), false);
+    }),
+  );
+
+  it.effect("maps Claude permission denials into resolved approval history events", () =>
+    Effect.gen(function* () {
+      mockState.spawnCalls.length = 0;
+      mockState.spawnMock.mockClear();
+
+      const adapter = yield* ClaudeAdapter;
+      const threadId = asThreadId("thread-permission-denial");
+
+      yield* adapter.startSession({
+        provider: "claude",
+        threadId,
+        runtimeMode: "approval-required",
+      });
+
+      yield* adapter.sendTurn({
+        threadId,
+        input: "blocked write",
+        attachments: [],
+      });
+      const child = mockState.spawnCalls[0]?.child;
+      assert.ok(child);
+
+      child.stdout.write(
+        `${JSON.stringify({
+          type: "result",
+          subtype: "error_max_turns",
+          permission_denials: [
+            {
+              tool_use_id: "tool-denied-1",
+              tool_name: "Write",
+              tool_input: {
+                file_path: "/tmp/blocked.ts",
+              },
+            },
+          ],
+        })}\n`,
+      );
+      yield* waitForAsyncEffects();
+
+      const events: Array<ProviderRuntimeEvent> = Array.from(
+        yield* Stream.runCollect(
+          adapter.streamEvents.pipe(
+            Stream.filter((event) => event.threadId === threadId),
+            Stream.take(8),
+          ),
+        ),
+      );
+      const opened = events.find((event) => event.type === "request.opened");
+      const resolved = events.find((event) => event.type === "request.resolved");
+
+      assert.ok(opened);
+      assert.ok(resolved);
+      assert.equal(opened?.requestId, "claude-denial:thread-permission-denial:tool-denied-1");
+      if (opened?.type === "request.opened") {
+        assert.equal(opened.payload.requestType, "file_change_approval");
+        assert.equal(opened.payload.detail, "/tmp/blocked.ts");
+      }
+      if (resolved?.type === "request.resolved") {
+        assert.equal(resolved.payload.requestType, "file_change_approval");
+        assert.equal(resolved.payload.decision, "decline");
+      }
     }),
   );
 });

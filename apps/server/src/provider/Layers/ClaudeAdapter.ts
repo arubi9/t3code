@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 
 import {
-  ApprovalRequestId,
   type CanonicalRequestType,
   type CanonicalItemType,
   EventId,
@@ -10,6 +9,7 @@ import {
   type ProviderSendTurnInput,
   type ProviderSession,
   RuntimeItemId,
+  RuntimeRequestId,
   RuntimeTaskId,
   ThreadId,
   TurnId,
@@ -250,6 +250,7 @@ function buildBaseEvent(input: {
   readonly threadId: ThreadId;
   readonly turnId?: TurnId;
   readonly itemId?: ProviderItemId;
+  readonly requestId?: RuntimeRequestId;
   readonly raw?: ProviderRuntimeEvent["raw"];
 }) {
   return {
@@ -259,6 +260,7 @@ function buildBaseEvent(input: {
     createdAt: nowIso(),
     ...(input.turnId ? { turnId: input.turnId } : {}),
     ...(input.itemId ? { itemId: RuntimeItemId.makeUnsafe(input.itemId) } : {}),
+    ...(input.requestId ? { requestId: input.requestId } : {}),
     ...(input.raw ? { raw: input.raw } : {}),
   } satisfies Omit<ProviderRuntimeEvent, "type" | "payload">;
 }
@@ -817,6 +819,72 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
               const permissionDenials = Array.isArray(record.permission_denials)
                 ? record.permission_denials
                 : [];
+              for (const denial of permissionDenials) {
+                const denialRecord = asRecord(denial);
+                const toolUseId =
+                  asString(denialRecord?.tool_use_id) ??
+                  asString(denialRecord?.toolUseId) ??
+                  asString(denialRecord?.id) ??
+                  crypto.randomUUID();
+                const toolName =
+                  asString(denialRecord?.tool_name) ??
+                  asString(denialRecord?.toolName) ??
+                  asString(denialRecord?.name) ??
+                  "Tool";
+                const detail = toolDetail(
+                  toolName,
+                  denialRecord?.tool_input ?? denialRecord?.toolInput ?? denialRecord?.input,
+                );
+                const requestId = RuntimeRequestId.makeUnsafe(
+                  `claude-denial:${input.threadId}:${toolUseId}`,
+                );
+                const requestType = requestTypeForClaudeTool(toolName);
+
+                appendTurnSnapshotItem(input.threadId, turnId, {
+                  kind: "approval.denied",
+                  requestId,
+                  requestType,
+                  toolName,
+                  ...(detail ? { detail } : {}),
+                  data: denialRecord ?? denial,
+                });
+
+                publishFork({
+                  ...buildBaseEvent({
+                    threadId: input.threadId,
+                    turnId,
+                    requestId,
+                    raw: buildRaw(denialRecord ?? denial, "result/permission_denial/request_opened"),
+                  }),
+                  type: "request.opened",
+                  payload: {
+                    requestType,
+                    ...(detail ? { detail } : {}),
+                    args: denialRecord ?? denial,
+                  },
+                });
+
+                publishFork({
+                  ...buildBaseEvent({
+                    threadId: input.threadId,
+                    turnId,
+                    requestId,
+                    raw: buildRaw(
+                      denialRecord ?? denial,
+                      "result/permission_denial/request_resolved",
+                    ),
+                  }),
+                  type: "request.resolved",
+                  payload: {
+                    requestType,
+                    decision: "decline",
+                    resolution: {
+                      source: "claude.permission_denial",
+                      denial: denialRecord ?? denial,
+                    },
+                  },
+                });
+              }
               const errorMessage =
                 record.is_error === true
                   ? coerceDetail(record.errors) ?? asString(record.result) ?? "Claude turn failed"

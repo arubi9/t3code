@@ -1117,7 +1117,7 @@ function createWindow(): BrowserWindow {
 
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("before-input-event", (event, input) => {
-    if (!isWindowsZoomInShortcut(input)) return;
+    if (!isWindowsZoomInShortcut(input, process.platform)) return;
     event.preventDefault();
     window.webContents.setZoomLevel(window.webContents.getZoomLevel() + 0.5);
   });

@@ -4,7 +4,11 @@ import { Effect, Layer, Sink, Stream } from "effect";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import { checkCodexProviderStatus, parseAuthStatusFromOutput } from "./ProviderHealth";
+import {
+  checkClaudeProviderStatus,
+  checkCodexProviderStatus,
+  parseAuthStatusFromOutput,
+} from "./ProviderHealth";
 
 // ── Test helpers ────────────────────────────────────────────────────
 
@@ -210,3 +214,49 @@ it("parseAuthStatusFromOutput: JSON without auth marker is warning", () => {
   assert.strictEqual(parsed.status, "warning");
   assert.strictEqual(parsed.authStatus, "unknown");
 });
+
+it("parseAuthStatusFromOutput: Claude context rewrites generic verification failures", () => {
+  const parsed = parseAuthStatusFromOutput(
+    {
+      stdout: "",
+      stderr: "",
+      code: 2,
+    },
+    {
+      providerLabel: "Claude Code CLI",
+      loginCommand: "claude auth login",
+      versionLabel: "Claude Code",
+    },
+  );
+  assert.strictEqual(parsed.status, "warning");
+  assert.strictEqual(parsed.authStatus, "unknown");
+  assert.strictEqual(
+    parsed.message,
+    "Could not verify Claude Code CLI authentication status. Command exited with code 2.",
+  );
+});
+
+it.effect("returns Claude-authenticated wording without Codex references", () =>
+  Effect.gen(function* () {
+    const status = yield* checkClaudeProviderStatus;
+    assert.strictEqual(status.provider, "claude");
+    assert.strictEqual(status.status, "warning");
+    assert.strictEqual(status.available, true);
+    assert.strictEqual(status.authStatus, "unknown");
+    assert.strictEqual(
+      status.message,
+      "Could not verify Claude Code CLI authentication status. Command exited with code 2.",
+    );
+  }).pipe(
+    Effect.provide(
+      mockSpawnerLayer((args) => {
+        const joined = args.join(" ");
+        if (joined === "--version") return { stdout: "claude 1.0.0\n", stderr: "", code: 0 };
+        if (joined === "auth status") {
+          return { stdout: "", stderr: "", code: 2 };
+        }
+        throw new Error(`Unexpected args: ${joined}`);
+      }),
+    ),
+  ),
+);

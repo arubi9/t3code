@@ -35,6 +35,24 @@ export interface CommandResult {
   readonly code: number;
 }
 
+interface AuthStatusMessageContext {
+  readonly providerLabel: string;
+  readonly loginCommand: string;
+  readonly versionLabel: string;
+}
+
+const codexAuthStatusMessageContext: AuthStatusMessageContext = {
+  providerLabel: "Codex CLI",
+  loginCommand: "codex login",
+  versionLabel: "Codex",
+};
+
+const claudeAuthStatusMessageContext: AuthStatusMessageContext = {
+  providerLabel: "Claude Code CLI",
+  loginCommand: "claude auth login",
+  versionLabel: "Claude Code",
+};
+
 function nonEmptyTrimmed(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const trimmed = value.trim();
@@ -90,7 +108,10 @@ function extractAuthBoolean(value: unknown): boolean | undefined {
   return undefined;
 }
 
-export function parseAuthStatusFromOutput(result: CommandResult): {
+export function parseAuthStatusFromOutput(
+  result: CommandResult,
+  context: AuthStatusMessageContext = codexAuthStatusMessageContext,
+): {
   readonly status: ServerProviderStatusState;
   readonly authStatus: ServerProviderAuthStatus;
   readonly message?: string;
@@ -105,7 +126,7 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     return {
       status: "warning",
       authStatus: "unknown",
-      message: "Codex CLI authentication status command is unavailable in this Codex version.",
+      message: `${context.providerLabel} authentication status command is unavailable in this ${context.versionLabel} version.`,
     };
   }
 
@@ -119,7 +140,7 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     return {
       status: "error",
       authStatus: "unauthenticated",
-      message: "Codex CLI is not authenticated. Run `codex login` and try again.",
+      message: `${context.providerLabel} is not authenticated. Run \`${context.loginCommand}\` and try again.`,
     };
   }
 
@@ -145,15 +166,14 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     return {
       status: "error",
       authStatus: "unauthenticated",
-      message: "Codex CLI is not authenticated. Run `codex login` and try again.",
+      message: `${context.providerLabel} is not authenticated. Run \`${context.loginCommand}\` and try again.`,
     };
   }
   if (parsedAuth.attemptedJsonParse) {
     return {
       status: "warning",
       authStatus: "unknown",
-      message:
-        "Could not verify Codex authentication status from JSON output (missing auth marker).",
+      message: `Could not verify ${context.providerLabel} authentication status from JSON output (missing auth marker).`,
     };
   }
   if (result.code === 0) {
@@ -165,8 +185,8 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     status: "warning",
     authStatus: "unknown",
     message: detail
-      ? `Could not verify Codex authentication status. ${detail}`
-      : "Could not verify Codex authentication status.",
+      ? `Could not verify ${context.providerLabel} authentication status. ${detail}`
+      : `Could not verify ${context.providerLabel} authentication status.`,
   };
 }
 
@@ -400,20 +420,14 @@ export const checkClaudeProviderStatus: Effect.Effect<
     };
   }
 
-  const parsed = parseAuthStatusFromOutput(authProbe.success.value);
+  const parsed = parseAuthStatusFromOutput(authProbe.success.value, claudeAuthStatusMessageContext);
   return {
     provider: CLAUDE_PROVIDER,
     status: parsed.status,
     available: true,
     authStatus: parsed.authStatus,
     checkedAt,
-    ...(parsed.message
-      ? {
-          message: parsed.message
-            .replaceAll("Codex CLI", "Claude Code CLI")
-            .replaceAll("codex login", "claude auth login"),
-        }
-      : {}),
+    ...(parsed.message ? { message: parsed.message } : {}),
   } satisfies ServerProviderStatus;
 });
 

@@ -15,6 +15,7 @@ import { NetService } from "@t3tools/shared/Net";
 import { RotatingFileSink } from "@t3tools/shared/logging";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import { fixPath } from "./fixPath";
+import { isWindowsZoomInShortcut } from "./zoomShortcuts";
 import {
   getAutoUpdateDisabledReason,
   shouldBroadcastDownloadProgress,
@@ -1115,6 +1116,11 @@ function createWindow(): BrowserWindow {
   });
 
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.on("before-input-event", (event, input) => {
+    if (!isWindowsZoomInShortcut(input)) return;
+    event.preventDefault();
+    window.webContents.setZoomLevel(window.webContents.getZoomLevel() + 0.5);
+  });
   window.on("page-title-updated", (event) => {
     event.preventDefault();
     window.setTitle(APP_DISPLAY_NAME);

@@ -3,6 +3,8 @@ import { ProviderKind } from "./orchestration";
 
 export const CODEX_REASONING_EFFORT_OPTIONS = ["xhigh", "high", "medium", "low"] as const;
 export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORT_OPTIONS)[number];
+export const CLAUDE_REASONING_EFFORT_OPTIONS = ["low", "medium", "high"] as const;
+export type ClaudeReasoningEffort = (typeof CLAUDE_REASONING_EFFORT_OPTIONS)[number];
 
 export const CodexModelOptions = Schema.Struct({
   reasoningEffort: Schema.optional(Schema.Literals(CODEX_REASONING_EFFORT_OPTIONS)),
@@ -10,7 +12,10 @@ export const CodexModelOptions = Schema.Struct({
 });
 export type CodexModelOptions = typeof CodexModelOptions.Type;
 
-export const ClaudeModelOptions = Schema.Struct({});
+export const ClaudeModelOptions = Schema.Struct({
+  thinking: Schema.optional(Schema.Boolean),
+  effort: Schema.optional(Schema.Literals(CLAUDE_REASONING_EFFORT_OPTIONS)),
+});
 export type ClaudeModelOptions = typeof ClaudeModelOptions.Type;
 
 export const ProviderModelOptions = Schema.Struct({
@@ -66,6 +71,10 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER = {
   claude: {
     "claude-sonnet-4-5": "sonnet",
     "claude-opus-4-1": "opus",
+    "claude-sonnet-4-6": "sonnet",
+    "claude-opus-4-6": "opus",
+    "claude-haiku-4-5": "haiku",
+    "claude-haiku-4-5-20251001": "haiku",
   },
 } as const satisfies Record<ProviderKind, Record<string, ModelSlug>>;
 

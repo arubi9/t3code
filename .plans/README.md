@@ -10,3 +10,11 @@
 8. `08-precommit-format-and-lint.md`
 9. `09-event-state-test-expansion.md`
 10. `10-unify-process-session-abstraction.md`
+11. `11-effect.md`
+12. `12-effect-new.md`
+13. `13-provider-service-integration-tests.md`
+14. `14-server-authoritative-event-sourcing-cleanup.md`
+15. `15-effect-server.md`
+16. `16-pr89-review-remediation-phases.md`
+17. `16c-pr89-remediation-checklist.md`
+18. `17-claude-first-class-integration.md`

@@ -2,6 +2,7 @@ import {
   type ApprovalRequestId,
   DEFAULT_MODEL_BY_PROVIDER,
   EDITORS,
+  type ClaudeReasoningEffort,
   type EditorId,
   type KeybindingCommand,
   type CodexReasoningEffort,
@@ -23,11 +24,16 @@ import {
   ProviderInteractionMode,
 } from "@t3tools/contracts";
 import {
+  getClaudeReasoningEffortOptions,
+  getDefaultClaudeReasoningEffort,
+  getDefaultClaudeThinkingEnabled,
   getDefaultModel,
   getDefaultReasoningEffort,
   getReasoningEffortOptions,
   normalizeModelSlug,
+  resolveClaudeModelOptions,
   resolveModelSlugForProvider,
+  supportsClaudeReasoningEffort,
 } from "@t3tools/shared/model";
 import { resolveProviderCapabilities } from "@t3tools/shared/provider";
 import {
@@ -277,6 +283,25 @@ function attachmentsUnsupportedMessage(provider: ProviderKind): string {
 
 function supervisedModeUnsupportedMessage(provider: ProviderKind): string {
   return `${providerDisplayLabel(provider)} does not support supervised approval mode in T3 yet.`;
+}
+
+const CLAUDE_REASONING_LABEL_BY_OPTION: Record<ClaudeReasoningEffort, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+};
+
+function planModeTitle(provider: ProviderKind, interactionMode: ProviderInteractionMode): string {
+  const providerLabel = providerDisplayLabel(provider);
+  return interactionMode === "plan"
+    ? `${providerLabel} plan mode — click to return to normal chat mode`
+    : `Default mode — click to enter ${providerLabel} plan mode`;
+}
+
+function planFollowUpPlaceholder(provider: ProviderKind): string {
+  return provider === "claude"
+    ? "Add feedback to refine the Claude plan, or leave this blank to implement it"
+    : "Add feedback to refine the plan, or leave this blank to implement it";
 }
 
 function readLastInvokedScriptByProjectFromStorage(): Record<string, string> {
@@ -631,6 +656,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const setComposerDraftEffort = useComposerDraftStore((store) => store.setEffort);
   const setComposerDraftCodexFastMode = useComposerDraftStore((store) => store.setCodexFastMode);
+  const setComposerDraftClaudeThinkingEnabled = useComposerDraftStore(
+    (store) => store.setClaudeThinkingEnabled,
+  );
+  const setComposerDraftClaudeReasoningEffort = useComposerDraftStore(
+    (store) => store.setClaudeReasoningEffort,
+  );
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);
@@ -833,16 +864,42 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const selectedEffort = composerDraft.effort ?? getDefaultReasoningEffort(selectedProvider);
   const selectedCodexFastModeEnabled =
     selectedProvider === "codex" ? composerDraft.codexFastMode : false;
+  const selectedClaudeThinkingEnabled =
+    selectedProvider === "claude"
+      ? (composerDraft.claudeThinkingEnabled ?? getDefaultClaudeThinkingEnabled())
+      : getDefaultClaudeThinkingEnabled();
+  const claudeReasoningOptions =
+    selectedProvider === "claude" ? getClaudeReasoningEffortOptions(selectedModel) : [];
+  const supportsClaudeEffort = claudeReasoningOptions.length > 0;
+  const selectedClaudeEffort =
+    selectedProvider === "claude" && supportsClaudeEffort
+      ? (composerDraft.claudeReasoningEffort ?? getDefaultClaudeReasoningEffort())
+      : null;
   const selectedModelOptionsForDispatch = useMemo(() => {
-    if (selectedProvider !== "codex") {
-      return undefined;
+    if (selectedProvider === "codex") {
+      const codexOptions = {
+        ...(supportsReasoningEffort && selectedEffort ? { reasoningEffort: selectedEffort } : {}),
+        ...(selectedCodexFastModeEnabled ? { fastMode: true } : {}),
+      };
+      return Object.keys(codexOptions).length > 0 ? { codex: codexOptions } : undefined;
     }
-    const codexOptions = {
-      ...(supportsReasoningEffort && selectedEffort ? { reasoningEffort: selectedEffort } : {}),
-      ...(selectedCodexFastModeEnabled ? { fastMode: true } : {}),
-    };
-    return Object.keys(codexOptions).length > 0 ? { codex: codexOptions } : undefined;
-  }, [selectedCodexFastModeEnabled, selectedEffort, selectedProvider, supportsReasoningEffort]);
+    if (selectedProvider === "claude") {
+      const claudeOptions = resolveClaudeModelOptions(selectedModel, {
+        ...(selectedClaudeThinkingEnabled ? {} : { thinking: false }),
+        ...(selectedClaudeEffort ? { effort: selectedClaudeEffort } : {}),
+      });
+      return claudeOptions ? { claude: claudeOptions } : undefined;
+    }
+    return undefined;
+  }, [
+    selectedClaudeEffort,
+    selectedClaudeThinkingEnabled,
+    selectedCodexFastModeEnabled,
+    selectedEffort,
+    selectedModel,
+    selectedProvider,
+    supportsReasoningEffort,
+  ]);
   const selectedModelForPicker = selectedModel;
   const modelOptionsByProvider = useMemo(
     () => getCustomModelOptionsByProvider(settings),
@@ -1230,7 +1287,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
           type: "slash-command",
           command: "plan",
           label: "/plan",
-          description: "Switch this thread into plan mode",
+          description:
+            selectedProvider === "claude"
+              ? "Switch this thread into Claude plan mode"
+              : "Switch this thread into plan mode",
         },
         {
           id: "slash:default",
@@ -1267,7 +1327,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
         showFastBadge:
           provider === "codex" && shouldShowFastTierIcon(slug, selectedServiceTierSetting),
       }));
-  }, [composerTrigger, searchableModelOptions, selectedServiceTierSetting, workspaceEntries]);
+  }, [
+    composerTrigger,
+    searchableModelOptions,
+    selectedProvider,
+    selectedServiceTierSetting,
+    workspaceEntries,
+  ]);
   const composerMenuOpen = Boolean(composerTrigger);
   const activeComposerMenuItem = useMemo(
     () =>
@@ -3114,6 +3180,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
         activeThread.id,
         resolveAppModelSelection(provider, getCustomModelsForProvider(settings, provider), model),
       );
+      if (provider === "claude" && !supportsClaudeReasoningEffort(model)) {
+        setComposerDraftClaudeReasoningEffort(activeThread.id, null);
+      }
       if (!nextProviderCapabilities.approvals && runtimeMode === "approval-required") {
         setComposerDraftRuntimeMode(activeThread.id, "full-access");
         if (isLocalDraftThread) {
@@ -3131,6 +3200,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       scheduleComposerFocus,
       setComposerDraftModel,
       setComposerDraftProvider,
+      setComposerDraftClaudeReasoningEffort,
       setComposerDraftRuntimeMode,
       setDraftThreadContext,
       settings,
@@ -3149,6 +3219,28 @@ export default function ChatView({ threadId }: ChatViewProps) {
       scheduleComposerFocus();
     },
     [scheduleComposerFocus, setComposerDraftCodexFastMode, threadId],
+  );
+  const onClaudeThinkingChange = useCallback(
+    (enabled: boolean) => {
+      setComposerDraftClaudeThinkingEnabled(threadId, enabled);
+      if (!enabled) {
+        setComposerDraftClaudeReasoningEffort(threadId, null);
+      }
+      scheduleComposerFocus();
+    },
+    [
+      scheduleComposerFocus,
+      setComposerDraftClaudeReasoningEffort,
+      setComposerDraftClaudeThinkingEnabled,
+      threadId,
+    ],
+  );
+  const onClaudeEffortSelect = useCallback(
+    (effort: ClaudeReasoningEffort | null) => {
+      setComposerDraftClaudeReasoningEffort(threadId, effort);
+      scheduleComposerFocus();
+    },
+    [scheduleComposerFocus, setComposerDraftClaudeReasoningEffort, threadId],
   );
   const onEnvModeChange = useCallback(
     (mode: DraftThreadEnvMode) => {
@@ -3658,7 +3750,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                     : activePendingProgress
                     ? "Type your own answer, or leave this blank to use the selected option"
                     : showPlanFollowUpPrompt && activeProposedPlan
-                      ? "Add feedback to refine the plan, or leave this blank to implement it"
+                      ? planFollowUpPlaceholder(selectedProvider)
                       : phase === "disconnected"
                         ? selectedProviderCapabilities.attachments
                           ? "Ask for follow-up changes or attach images"
@@ -3710,6 +3802,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
                         onFastModeChange={onCodexFastModeChange}
                       />
                     </>
+                  ) : selectedProvider === "claude" ? (
+                    <>
+                      <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
+                      <ClaudeTraitsPicker
+                        thinkingEnabled={selectedClaudeThinkingEnabled}
+                        effort={selectedClaudeEffort}
+                        supportsReasoningEffort={supportsClaudeEffort}
+                        options={claudeReasoningOptions}
+                        onThinkingChange={onClaudeThinkingChange}
+                        onEffortChange={onClaudeEffortSelect}
+                      />
+                    </>
                   ) : null}
 
                   {/* Divider */}
@@ -3722,11 +3826,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                     size="sm"
                     type="button"
                     onClick={toggleInteractionMode}
-                    title={
-                      interactionMode === "plan"
-                        ? "Plan mode — click to return to normal chat mode"
-                        : "Default mode — click to enter plan mode"
-                    }
+                    title={planModeTitle(selectedProvider, interactionMode)}
                   >
                     <BotIcon />
                     <span className="sr-only sm:not-sr-only">
@@ -5660,6 +5760,94 @@ const CodexTraitsPicker = memo(function CodexTraitsPicker(props: {
             <MenuRadioItem value="on">on</MenuRadioItem>
           </MenuRadioGroup>
         </MenuGroup>
+      </MenuPopup>
+    </Menu>
+  );
+});
+
+const ClaudeTraitsPicker = memo(function ClaudeTraitsPicker(props: {
+  thinkingEnabled: boolean;
+  effort: ClaudeReasoningEffort | null;
+  supportsReasoningEffort: boolean;
+  options: ReadonlyArray<ClaudeReasoningEffort>;
+  onThinkingChange: (enabled: boolean) => void;
+  onEffortChange: (effort: ClaudeReasoningEffort | null) => void;
+}) {
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const triggerLabel = props.thinkingEnabled
+    ? ["Thinking", ...(props.effort ? [CLAUDE_REASONING_LABEL_BY_OPTION[props.effort]] : [])]
+        .filter(Boolean)
+        .join(" · ")
+    : "No thinking";
+
+  return (
+    <Menu
+      open={isMenuOpen}
+      onOpenChange={(open) => {
+        setIsMenuOpen(open);
+      }}
+    >
+      <MenuTrigger
+        render={
+          <Button
+            size="sm"
+            variant="ghost"
+            className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
+          />
+        }
+      >
+        <span>{triggerLabel}</span>
+        <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
+      </MenuTrigger>
+      <MenuPopup align="start">
+        <MenuGroup>
+          <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Thinking</div>
+          <MenuRadioGroup
+            value={props.thinkingEnabled ? "on" : "off"}
+            onValueChange={(value) => {
+              props.onThinkingChange(value === "on");
+            }}
+          >
+            <MenuRadioItem value="on">on</MenuRadioItem>
+            <MenuRadioItem value="off">off</MenuRadioItem>
+          </MenuRadioGroup>
+        </MenuGroup>
+        {props.thinkingEnabled && props.supportsReasoningEffort ? (
+          <>
+            <MenuDivider />
+            <MenuGroup>
+              <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Effort</div>
+              <MenuRadioGroup
+                value={props.effort ?? "default"}
+                onValueChange={(value) => {
+                  if (value === "default") {
+                    props.onEffortChange(null);
+                    return;
+                  }
+                  const nextEffort = props.options.find((option) => option === value);
+                  if (!nextEffort) return;
+                  props.onEffortChange(nextEffort);
+                }}
+              >
+                <MenuRadioItem value="default">Default</MenuRadioItem>
+                {props.options.map((effort) => (
+                  <MenuRadioItem key={effort} value={effort}>
+                    {CLAUDE_REASONING_LABEL_BY_OPTION[effort]}
+                  </MenuRadioItem>
+                ))}
+              </MenuRadioGroup>
+            </MenuGroup>
+          </>
+        ) : (
+          <>
+            <MenuDivider />
+            <div className="px-2 py-1.5 text-[11px] leading-relaxed text-muted-foreground/80">
+              {props.thinkingEnabled
+                ? "Effort is available for Claude Sonnet 4.6 and Claude Opus 4.6 models."
+                : "Turn thinking on to adjust Claude effort."}
+            </div>
+          </>
+        )}
       </MenuPopup>
     </Menu>
   );

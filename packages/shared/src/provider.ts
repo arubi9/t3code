@@ -24,11 +24,11 @@ const PROVIDER_CAPABILITY_DEFAULTS: Record<ProviderKind, ProviderCapabilities> =
   },
   claude: {
     sessionModelSwitch: "in-session",
-    approvals: false,
-    structuredUserInput: false,
+    approvals: true,
+    structuredUserInput: true,
     providerHistoryRead: false,
-    providerRollback: false,
-    attachments: false,
+    providerRollback: true,
+    attachments: true,
   },
 };
 

@@ -1,8 +1,10 @@
 import {
+  CLAUDE_REASONING_EFFORT_OPTIONS,
   DEFAULT_REASONING_EFFORT_BY_PROVIDER,
   ProjectId,
   REASONING_EFFORT_OPTIONS_BY_PROVIDER,
   ThreadId,
+  type ClaudeReasoningEffort,
   type CodexReasoningEffort,
   type ProviderKind,
   type ProviderInteractionMode,
@@ -42,6 +44,8 @@ interface PersistedComposerThreadDraftState {
   interactionMode?: ProviderInteractionMode | null;
   effort?: CodexReasoningEffort | null;
   codexFastMode?: boolean | null;
+  claudeThinkingEnabled?: boolean | null;
+  claudeReasoningEffort?: ClaudeReasoningEffort | null;
   serviceTier?: string | null;
 }
 
@@ -72,6 +76,8 @@ interface ComposerThreadDraftState {
   interactionMode: ProviderInteractionMode | null;
   effort: CodexReasoningEffort | null;
   codexFastMode: boolean;
+  claudeThinkingEnabled: boolean | null;
+  claudeReasoningEffort: ClaudeReasoningEffort | null;
 }
 
 export interface DraftThreadState {
@@ -131,6 +137,11 @@ interface ComposerDraftStoreState {
   ) => void;
   setEffort: (threadId: ThreadId, effort: CodexReasoningEffort | null | undefined) => void;
   setCodexFastMode: (threadId: ThreadId, enabled: boolean | null | undefined) => void;
+  setClaudeThinkingEnabled: (threadId: ThreadId, enabled: boolean | null | undefined) => void;
+  setClaudeReasoningEffort: (
+    threadId: ThreadId,
+    effort: ClaudeReasoningEffort | null | undefined,
+  ) => void;
   addImage: (threadId: ThreadId, image: ComposerImageAttachment) => void;
   addImages: (threadId: ThreadId, images: ComposerImageAttachment[]) => void;
   removeImage: (threadId: ThreadId, imageId: string) => void;
@@ -166,10 +177,15 @@ const EMPTY_THREAD_DRAFT = Object.freeze({
   interactionMode: null,
   effort: null,
   codexFastMode: false,
+  claudeThinkingEnabled: null,
+  claudeReasoningEffort: null,
 }) as ComposerThreadDraftState;
 
 const REASONING_EFFORT_VALUES = new Set<CodexReasoningEffort>(
   REASONING_EFFORT_OPTIONS_BY_PROVIDER.codex,
+);
+const CLAUDE_REASONING_EFFORT_VALUES = new Set<ClaudeReasoningEffort>(
+  CLAUDE_REASONING_EFFORT_OPTIONS,
 );
 
 function createEmptyThreadDraft(): ComposerThreadDraftState {
@@ -184,6 +200,8 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     interactionMode: null,
     effort: null,
     codexFastMode: false,
+    claudeThinkingEnabled: null,
+    claudeReasoningEffort: null,
   };
 }
 
@@ -203,7 +221,9 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.runtimeMode === null &&
     draft.interactionMode === null &&
     draft.effort === null &&
-    draft.codexFastMode === false
+    draft.codexFastMode === false &&
+    draft.claudeThinkingEnabled === null &&
+    draft.claudeReasoningEffort === null
   );
 }
 
@@ -389,6 +409,21 @@ function normalizePersistedComposerDraftState(value: unknown): PersistedComposer
     const codexFastMode =
       draftCandidate.codexFastMode === true ||
       (typeof draftCandidate.serviceTier === "string" && draftCandidate.serviceTier === "fast");
+    const claudeThinkingEnabled =
+      draftCandidate.claudeThinkingEnabled === false
+        ? false
+        : draftCandidate.claudeThinkingEnabled === true
+          ? true
+          : null;
+    const claudeReasoningEffortCandidate =
+      typeof draftCandidate.claudeReasoningEffort === "string"
+        ? draftCandidate.claudeReasoningEffort
+        : null;
+    const claudeReasoningEffort =
+      claudeReasoningEffortCandidate &&
+      CLAUDE_REASONING_EFFORT_VALUES.has(claudeReasoningEffortCandidate as ClaudeReasoningEffort)
+        ? (claudeReasoningEffortCandidate as ClaudeReasoningEffort)
+        : null;
     if (
       prompt.length === 0 &&
       attachments.length === 0 &&
@@ -397,7 +432,9 @@ function normalizePersistedComposerDraftState(value: unknown): PersistedComposer
       !runtimeMode &&
       !interactionMode &&
       !effort &&
-      !codexFastMode
+      !codexFastMode &&
+      claudeThinkingEnabled !== false &&
+      !claudeReasoningEffort
     ) {
       continue;
     }
@@ -410,6 +447,8 @@ function normalizePersistedComposerDraftState(value: unknown): PersistedComposer
       ...(interactionMode ? { interactionMode } : {}),
       ...(effort ? { effort } : {}),
       ...(codexFastMode ? { codexFastMode } : {}),
+      ...(claudeThinkingEnabled === false ? { claudeThinkingEnabled: false } : {}),
+      ...(claudeReasoningEffort ? { claudeReasoningEffort } : {}),
     };
   }
   return {
@@ -517,6 +556,13 @@ function toHydratedThreadDraft(
     interactionMode: persistedDraft.interactionMode ?? null,
     effort: persistedDraft.effort ?? null,
     codexFastMode: persistedDraft.codexFastMode === true,
+    claudeThinkingEnabled:
+      persistedDraft.claudeThinkingEnabled === false
+        ? false
+        : persistedDraft.claudeThinkingEnabled === true
+          ? true
+          : null,
+    claudeReasoningEffort: persistedDraft.claudeReasoningEffort ?? null,
   };
 }
 
@@ -947,6 +993,61 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           return { draftsByThreadId: nextDraftsByThreadId };
         });
       },
+      setClaudeThinkingEnabled: (threadId, enabled) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        const nextClaudeThinkingEnabled = enabled === false ? false : null;
+        set((state) => {
+          const existing = state.draftsByThreadId[threadId];
+          if (!existing && nextClaudeThinkingEnabled === null) {
+            return state;
+          }
+          const base = existing ?? createEmptyThreadDraft();
+          if (base.claudeThinkingEnabled === nextClaudeThinkingEnabled) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...base,
+            claudeThinkingEnabled: nextClaudeThinkingEnabled,
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
+      setClaudeReasoningEffort: (threadId, effort) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        const nextClaudeReasoningEffort =
+          effort && CLAUDE_REASONING_EFFORT_VALUES.has(effort) ? effort : null;
+        set((state) => {
+          const existing = state.draftsByThreadId[threadId];
+          if (!existing && nextClaudeReasoningEffort === null) {
+            return state;
+          }
+          const base = existing ?? createEmptyThreadDraft();
+          if (base.claudeReasoningEffort === nextClaudeReasoningEffort) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...base,
+            claudeReasoningEffort: nextClaudeReasoningEffort,
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
       addImage: (threadId, image) => {
         if (threadId.length === 0) {
           return;
@@ -1184,7 +1285,9 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             draft.runtimeMode === null &&
             draft.interactionMode === null &&
             draft.effort === null &&
-            draft.codexFastMode === false
+            draft.codexFastMode === false &&
+            draft.claudeThinkingEnabled === null &&
+            draft.claudeReasoningEffort === null
           ) {
             continue;
           }
@@ -1209,6 +1312,12 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           }
           if (draft.codexFastMode) {
             persistedDraft.codexFastMode = true;
+          }
+          if (draft.claudeThinkingEnabled === false) {
+            persistedDraft.claudeThinkingEnabled = false;
+          }
+          if (draft.claudeReasoningEffort) {
+            persistedDraft.claudeReasoningEffort = draft.claudeReasoningEffort;
           }
           persistedDraftsByThreadId[threadId as ThreadId] = persistedDraft;
         }

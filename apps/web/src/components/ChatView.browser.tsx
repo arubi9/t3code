@@ -875,4 +875,51 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await mounted.cleanup();
     }
   });
+
+  it("uses Claude-specific plan mode copy when Claude is the selected draft provider", async () => {
+    useComposerDraftStore.setState({
+      draftsByThreadId: {
+        [THREAD_ID]: {
+          prompt: "",
+          images: [],
+          nonPersistedImageIds: [],
+          persistedAttachments: [],
+          provider: "claude",
+          model: "sonnet",
+          runtimeMode: null,
+          interactionMode: null,
+          effort: null,
+          codexFastMode: false,
+          claudeThinkingEnabled: null,
+          claudeReasoningEffort: null,
+        },
+      },
+      draftThreadsByThreadId: {
+        [THREAD_ID]: {
+          projectId: PROJECT_ID,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+        },
+      },
+      projectDraftThreadIdByProjectId: {
+        [PROJECT_ID]: THREAD_ID,
+      },
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+    });
+
+    try {
+      const button = await waitForInteractionModeButton("Chat");
+      expect(button.title).toContain("Claude Code plan mode");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
 });

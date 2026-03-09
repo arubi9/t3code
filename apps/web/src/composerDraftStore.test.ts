@@ -360,6 +360,40 @@ describe("composerDraftStore codex fast mode", () => {
   });
 });
 
+describe("composerDraftStore claude traits", () => {
+  const threadId = ThreadId.makeUnsafe("thread-claude-traits");
+
+  beforeEach(() => {
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+    });
+  });
+
+  it("stores Claude thinking overrides when disabled", () => {
+    const store = useComposerDraftStore.getState();
+    store.setClaudeThinkingEnabled(threadId, false);
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.claudeThinkingEnabled).toBe(
+      false,
+    );
+  });
+
+  it("stores and clears Claude reasoning effort overrides", () => {
+    const store = useComposerDraftStore.getState();
+    store.setClaudeReasoningEffort(threadId, "high");
+
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.claudeReasoningEffort,
+    ).toBe("high");
+
+    store.setClaudeReasoningEffort(threadId, null);
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+});
+
 describe("composerDraftStore setModel", () => {
   const threadId = ThreadId.makeUnsafe("thread-model");
 

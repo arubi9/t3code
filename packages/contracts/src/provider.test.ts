@@ -69,7 +69,10 @@ describe("ProviderSendTurnInput", () => {
       cwd: "/tmp/workspace",
       model: "sonnet",
       modelOptions: {
-        claude: {},
+        claude: {
+          thinking: false,
+          effort: "medium",
+        },
       },
       runtimeMode: "approval-required",
       providerOptions: {
@@ -81,6 +84,8 @@ describe("ProviderSendTurnInput", () => {
 
     expect(parsed.provider).toBe("claude");
     expect(parsed.model).toBe("sonnet");
+    expect(parsed.modelOptions?.claude?.thinking).toBe(false);
+    expect(parsed.modelOptions?.claude?.effort).toBe("medium");
     expect(parsed.providerOptions?.claude?.binaryPath).toBe("/usr/local/bin/claude");
   });
 });

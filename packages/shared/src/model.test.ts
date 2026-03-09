@@ -1,13 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_MODEL_BY_PROVIDER, MODEL_OPTIONS_BY_PROVIDER } from "@t3tools/contracts";
+import {
+  CLAUDE_REASONING_EFFORT_OPTIONS,
+  DEFAULT_MODEL_BY_PROVIDER,
+  MODEL_OPTIONS_BY_PROVIDER,
+} from "@t3tools/contracts";
 
 import {
+  getClaudeReasoningEffortOptions,
+  getDefaultClaudeReasoningEffort,
+  getDefaultClaudeThinkingEnabled,
   getDefaultModel,
   getDefaultReasoningEffort,
   getModelOptions,
   getReasoningEffortOptions,
   normalizeModelSlug,
+  resolveClaudeModelOptions,
   resolveModelSlug,
+  supportsClaudeReasoningEffort,
 } from "./model";
 
 describe("normalizeModelSlug", () => {
@@ -73,6 +82,44 @@ describe("getReasoningEffortOptions", () => {
 
   it("returns no reasoning options for claude", () => {
     expect(getReasoningEffortOptions("claude")).toEqual([]);
+  });
+});
+
+describe("Claude model helpers", () => {
+  it("reports which Claude models support reasoning effort", () => {
+    expect(supportsClaudeReasoningEffort("sonnet")).toBe(true);
+    expect(supportsClaudeReasoningEffort("claude-opus-4-6")).toBe(true);
+    expect(supportsClaudeReasoningEffort("haiku")).toBe(false);
+    expect(supportsClaudeReasoningEffort("default")).toBe(false);
+  });
+
+  it("returns Claude reasoning effort options only for supported models", () => {
+    expect(getClaudeReasoningEffortOptions("sonnet")).toEqual(CLAUDE_REASONING_EFFORT_OPTIONS);
+    expect(getClaudeReasoningEffortOptions("haiku")).toEqual([]);
+  });
+
+  it("returns Claude defaults", () => {
+    expect(getDefaultClaudeThinkingEnabled()).toBe(true);
+    expect(getDefaultClaudeReasoningEffort()).toBeNull();
+  });
+
+  it("normalizes Claude model options to supported combinations", () => {
+    expect(
+      resolveClaudeModelOptions("sonnet", {
+        thinking: false,
+        effort: "high",
+      }),
+    ).toEqual({ thinking: false });
+    expect(
+      resolveClaudeModelOptions("haiku", {
+        effort: "medium",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveClaudeModelOptions("opus", {
+        effort: "high",
+      }),
+    ).toEqual({ effort: "high" });
   });
 });
 

@@ -8,6 +8,7 @@ const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
 const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
+  claude: new Set(getModelOptions("claude").map((option) => option.slug)),
 };
 
 const AppSettingsSchema = Schema.Struct({

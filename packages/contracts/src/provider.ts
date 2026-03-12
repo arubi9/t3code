@@ -19,6 +19,7 @@ import {
   ProviderKind,
   ProviderRequestKind,
   ProviderSandboxMode,
+  ProviderServiceTier,
   ProviderUserInputAnswers,
   RuntimeMode,
 } from "./orchestration";
@@ -31,6 +32,23 @@ const ProviderSessionStatus = Schema.Literals([
   "error",
   "closed",
 ]);
+
+export const ProviderSessionModelSwitchMode = Schema.Literals([
+  "in-session",
+  "restart-session",
+  "unsupported",
+]);
+export type ProviderSessionModelSwitchMode = typeof ProviderSessionModelSwitchMode.Type;
+
+export const ProviderCapabilities = Schema.Struct({
+  sessionModelSwitch: ProviderSessionModelSwitchMode,
+  approvals: Schema.Boolean,
+  structuredUserInput: Schema.Boolean,
+  providerHistoryRead: Schema.Boolean,
+  providerRollback: Schema.Boolean,
+  attachments: Schema.Boolean,
+});
+export type ProviderCapabilities = typeof ProviderCapabilities.Type;
 
 export const ProviderSession = Schema.Struct({
   provider: ProviderKind,
@@ -52,8 +70,13 @@ const CodexProviderStartOptions = Schema.Struct({
   homePath: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 
+const ClaudeProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+
 export const ProviderStartOptions = Schema.Struct({
   codex: Schema.optional(CodexProviderStartOptions),
+  claude: Schema.optional(ClaudeProviderStartOptions),
 });
 export type ProviderStartOptions = typeof ProviderStartOptions.Type;
 
@@ -64,6 +87,7 @@ export const ProviderSessionStartInput = Schema.Struct({
   model: Schema.optional(TrimmedNonEmptyStringSchema),
   modelOptions: Schema.optional(ProviderModelOptions),
   resumeCursor: Schema.optional(Schema.Unknown),
+  serviceTier: Schema.optional(Schema.NullOr(ProviderServiceTier)),
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
   providerOptions: Schema.optional(ProviderStartOptions),
@@ -80,6 +104,7 @@ export const ProviderSendTurnInput = Schema.Struct({
     Schema.Array(ChatAttachment).check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS)),
   ),
   model: Schema.optional(TrimmedNonEmptyStringSchema),
+  serviceTier: Schema.optional(Schema.NullOr(ProviderServiceTier)),
   modelOptions: Schema.optional(ProviderModelOptions),
   interactionMode: Schema.optional(ProviderInteractionMode),
 });

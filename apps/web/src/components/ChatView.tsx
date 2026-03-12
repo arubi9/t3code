@@ -5663,11 +5663,13 @@ function getCustomModelOptionsByProvider(settings: {
 }): Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>> {
   return {
     codex: getAppModelOptions("codex", settings.customCodexModels),
+    claude: getAppModelOptions("claude", []),
   };
 }
 
 const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   codex: OpenAI,
+  claude: ClaudeAI,
   claudeCode: ClaudeAI,
   cursor: CursorIcon,
 };

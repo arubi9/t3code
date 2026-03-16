@@ -42,7 +42,8 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "sonnet", name: "Claude Sonnet 4.6" },
     { slug: "opus", name: "Claude Opus 4.6" },
     { slug: "haiku", name: "Claude Haiku 4.5" },
-    { slug: "sonnet[1m]", name: "Claude Sonnet 4.6 (1M Context Beta)" },
+    { slug: "sonnet[1m]", name: "Claude Sonnet 4.6 (1M Context)" },
+    { slug: "opus[1m]", name: "Claude Opus 4.6 (1M Context)" },
     { slug: "opusplan", name: "Claude Opus Plan" },
     { slug: "claude-sonnet-4-6", name: "Claude Sonnet 4.6 (Pinned)" },
     { slug: "claude-opus-4-6", name: "Claude Opus 4.6 (Pinned)" },
@@ -71,10 +72,6 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER = {
   claude: {
     "claude-sonnet-4-5": "sonnet",
     "claude-opus-4-1": "opus",
-    "claude-sonnet-4-6": "sonnet",
-    "claude-opus-4-6": "opus",
-    "claude-haiku-4-5": "haiku",
-    "claude-haiku-4-5-20251001": "haiku",
   },
 } as const satisfies Record<ProviderKind, Record<string, ModelSlug>>;
 

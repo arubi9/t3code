@@ -1381,7 +1381,7 @@ export function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
             }),
           ];
 
-          if (model) {
+          if (model && model !== "default") {
             args.push("--model", model);
           }
 

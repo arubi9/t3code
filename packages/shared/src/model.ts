@@ -21,6 +21,7 @@ const CLAUDE_MODELS_WITH_REASONING_EFFORT = new Set<ModelSlug>([
   "sonnet",
   "sonnet[1m]",
   "opus",
+  "opus[1m]",
   "claude-sonnet-4-6",
   "claude-opus-4-6",
 ]);

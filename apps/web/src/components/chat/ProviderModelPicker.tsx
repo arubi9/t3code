@@ -63,6 +63,7 @@ function resolveModelForProviderPicker(
 
 const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   codex: OpenAI,
+  claude: ClaudeAI,
   claudeCode: ClaudeAI,
   cursor: CursorIcon,
 };
@@ -122,6 +123,23 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         </span>
       </MenuTrigger>
       <MenuPopup align="start">
+        {props.lockedProvider !== null && (() => {
+          const lockedProviderLabel =
+            props.lockedProvider === "codex"
+              ? "Codex"
+              : props.lockedProvider === "claude"
+                ? "Claude Code"
+                : null;
+          return lockedProviderLabel ? (
+            <>
+              <div className="px-2 py-1.5 text-[11px] leading-relaxed text-muted-foreground/80">
+                This thread is locked to {lockedProviderLabel}. Start a new thread to switch
+                providers.
+              </div>
+              <MenuDivider />
+            </>
+          ) : null;
+        })()}
         {AVAILABLE_PROVIDER_OPTIONS.map((option) => {
           const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
           const isDisabledByProviderLock =
@@ -134,6 +152,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                   className="size-4 shrink-0 text-muted-foreground/85"
                 />
                 {option.label}
+                {isDisabledByProviderLock ? (
+                  <span className="ms-auto text-[11px] text-muted-foreground/75 uppercase tracking-[0.08em]">
+                    New thread
+                  </span>
+                ) : null}
               </MenuSubTrigger>
               <MenuSubPopup className="[--available-height:min(24rem,70vh)]">
                 <MenuGroup>

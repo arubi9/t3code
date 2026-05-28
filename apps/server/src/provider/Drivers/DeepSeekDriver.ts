@@ -30,22 +30,13 @@ import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment
 import {
   enrichProviderSnapshotWithVersionAdvisory,
   makePackageManagedProviderMaintenanceResolver,
-  normalizeCommandPath,
   resolveProviderMaintenanceCapabilitiesEffect,
 } from "../providerMaintenance.ts";
+import { isClaudeNativeCommandPath } from "./ClaudeCodeMaintenance.ts";
 import { makeClaudeContinuationGroupKey } from "./ClaudeHome.ts";
 
 const decodeDeepSeekSettings = Schema.decodeSync(DeepSeekSettings);
 const SNAPSHOT_REFRESH_INTERVAL = Duration.minutes(5);
-
-function isClaudeNativeCommandPath(commandPath: string): boolean {
-  const normalized = normalizeCommandPath(commandPath);
-  return (
-    normalized.endsWith("/.local/bin/claude") ||
-    normalized.endsWith("/.local/bin/claude.exe") ||
-    normalized.includes("/.local/share/claude/")
-  );
-}
 
 const UPDATE = makePackageManagedProviderMaintenanceResolver({
   provider: DEEPSEEK_DRIVER_KIND,

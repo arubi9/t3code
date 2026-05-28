@@ -581,6 +581,48 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect(
+    "stores legacy DeepSeek API keys outside settings.json and restores them server-side",
+    () =>
+      Effect.gen(function* () {
+        const serverSettings = yield* ServerSettingsService;
+        const serverConfig = yield* ServerConfig;
+        const fileSystem = yield* FileSystem.FileSystem;
+
+        const next = yield* serverSettings.updateSettings({
+          providers: {
+            deepseek: { apiKey: "sk-legacy-deepseek-secret", binaryPath: "claude" },
+          },
+        });
+
+        assert.deepEqual(next.providers.deepseek, {
+          enabled: true,
+          apiKey: "sk-legacy-deepseek-secret",
+          apiKeyRedacted: true,
+          binaryPath: "claude",
+          homePath: "",
+          customModels: [],
+          launchArgs: "",
+        });
+
+        const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+        assert.notInclude(raw, "sk-legacy-deepseek-secret");
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        assert.deepEqual(JSON.parse(raw).providers.deepseek, {
+          apiKeyRedacted: true,
+        });
+
+        const roundTripped = yield* serverSettings.updateSettings({
+          providers: {
+            deepseek: { apiKey: "", apiKeyRedacted: true, binaryPath: "claude" },
+          },
+        });
+
+        assert.equal(roundTripped.providers.deepseek.apiKey, "sk-legacy-deepseek-secret");
+        assert.equal(roundTripped.providers.deepseek.apiKeyRedacted, true);
+      }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("removes stale DeepSeek API key secrets when the provider instance is cleared", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsService;
@@ -613,6 +655,33 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("removes stale legacy DeepSeek API key secrets when the field is cleared", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsService;
+
+      yield* serverSettings.updateSettings({
+        providers: {
+          deepseek: { apiKey: "sk-legacy-deepseek-secret" },
+        },
+      });
+
+      yield* serverSettings.updateSettings({
+        providers: {
+          deepseek: { apiKey: "", apiKeyRedacted: false },
+        },
+      });
+
+      const next = yield* serverSettings.updateSettings({
+        providers: {
+          deepseek: { apiKey: "", apiKeyRedacted: true },
+        },
+      });
+
+      assert.equal(next.providers.deepseek.apiKey, "");
+      assert.equal(next.providers.deepseek.apiKeyRedacted, true);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("redacts DeepSeek API keys from client settings payloads", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsService;
@@ -630,6 +699,28 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.deepEqual(redactServerSettingsForClient(next).providerInstances[instanceId]?.config, {
         apiKey: "",
         apiKeyRedacted: true,
+      });
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("redacts legacy DeepSeek API keys from client settings payloads", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsService;
+
+      const next = yield* serverSettings.updateSettings({
+        providers: {
+          deepseek: { apiKey: "sk-legacy-deepseek-secret" },
+        },
+      });
+
+      assert.deepEqual(redactServerSettingsForClient(next).providers.deepseek, {
+        enabled: true,
+        apiKey: "",
+        apiKeyRedacted: true,
+        binaryPath: "claude",
+        homePath: "",
+        customModels: [],
+        launchArgs: "",
       });
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );

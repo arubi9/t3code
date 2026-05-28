@@ -83,6 +83,8 @@ function deepSeekApiKeySecretName(instanceId: string): string {
   return `provider-config-${Buffer.from(instanceId, "utf8").toString("base64url")}-deepseek-api-key`;
 }
 
+const DEEPSEEK_LEGACY_API_KEY_SECRET_NAME = "provider-config-legacy-deepseek-api-key";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -106,6 +108,7 @@ function redactProviderEnvironmentVariable(
 }
 
 export function redactServerSettingsForClient(settings: ServerSettings): ServerSettings {
+  const deepSeekProvider = settings.providers.deepseek;
   const providerInstances = Object.fromEntries(
     Object.entries(settings.providerInstances).map(([instanceId, instance]) => [
       instanceId,
@@ -128,7 +131,18 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
       },
     ]),
   );
-  return { ...settings, providerInstances };
+  return {
+    ...settings,
+    providers: {
+      ...settings.providers,
+      deepseek: {
+        ...deepSeekProvider,
+        apiKey: "",
+        ...(deepSeekProvider.apiKey.length > 0 ? { apiKeyRedacted: true } : {}),
+      },
+    },
+    providerInstances,
+  };
 }
 
 export interface ServerSettingsShape {
@@ -390,6 +404,25 @@ const makeServerSettings = Effect.gen(function* () {
     settings: ServerSettings,
   ): Effect.Effect<ServerSettings, ServerSettingsError> =>
     Effect.gen(function* () {
+      let providers = settings.providers;
+      const legacyDeepSeekSettings = settings.providers.deepseek;
+      if (legacyDeepSeekSettings.apiKeyRedacted === true && legacyDeepSeekSettings.apiKey === "") {
+        const secret = yield* secretStore
+          .get(DEEPSEEK_LEGACY_API_KEY_SECRET_NAME)
+          .pipe(
+            Effect.mapError((cause) =>
+              toSettingsError("failed to read DeepSeek API key secret", cause),
+            ),
+          );
+        providers = {
+          ...settings.providers,
+          deepseek: {
+            ...legacyDeepSeekSettings,
+            apiKey: secret ? textDecoder.decode(secret) : "",
+          },
+        };
+      }
+
       const providerInstances: Record<string, ProviderInstanceConfig> = {
         ...settings.providerInstances,
       };
@@ -413,6 +446,7 @@ const makeServerSettings = Effect.gen(function* () {
       }
       return {
         ...settings,
+        providers,
         providerInstances: providerInstances as ServerSettings["providerInstances"],
       };
     });
@@ -506,11 +540,39 @@ const makeServerSettings = Effect.gen(function* () {
     next: ServerSettings,
   ): Effect.Effect<ServerSettings, ServerSettingsError> =>
     Effect.gen(function* () {
+      let providers = next.providers;
       const providerInstances: Record<string, ProviderInstanceConfig> = {
         ...next.providerInstances,
       };
 
       const nextSecretKeys = new Set<string>();
+      const legacyApiKey = next.providers.deepseek.apiKey;
+      const legacyApiKeyRedacted = next.providers.deepseek.apiKeyRedacted === true;
+      const legacyCurrentlyRedacted = current.providers.deepseek.apiKeyRedacted === true;
+
+      if (!legacyApiKeyRedacted && legacyApiKey.length > 0) {
+        yield* secretStore
+          .set(DEEPSEEK_LEGACY_API_KEY_SECRET_NAME, textEncoder.encode(legacyApiKey))
+          .pipe(
+            Effect.mapError((cause) =>
+              toSettingsError("failed to persist DeepSeek API key secret", cause),
+            ),
+          );
+        nextSecretKeys.add(DEEPSEEK_LEGACY_API_KEY_SECRET_NAME);
+        providers = {
+          ...next.providers,
+          deepseek: { ...next.providers.deepseek, apiKey: "", apiKeyRedacted: true },
+        };
+      } else {
+        if (legacyApiKeyRedacted && legacyCurrentlyRedacted) {
+          nextSecretKeys.add(DEEPSEEK_LEGACY_API_KEY_SECRET_NAME);
+        }
+        providers = {
+          ...next.providers,
+          deepseek: { ...next.providers.deepseek, apiKey: "" },
+        };
+      }
+
       for (const [instanceId, instance] of Object.entries(next.providerInstances)) {
         if (!isDeepSeekProviderInstance(instance) || !isRecord(instance.config)) continue;
 
@@ -550,6 +612,16 @@ const makeServerSettings = Effect.gen(function* () {
         } satisfies ProviderInstanceConfig;
       }
 
+      if (!nextSecretKeys.has(DEEPSEEK_LEGACY_API_KEY_SECRET_NAME)) {
+        yield* secretStore
+          .remove(DEEPSEEK_LEGACY_API_KEY_SECRET_NAME)
+          .pipe(
+            Effect.mapError((cause) =>
+              toSettingsError("failed to remove stale DeepSeek API key secret", cause),
+            ),
+          );
+      }
+
       for (const [instanceId, instance] of Object.entries(current.providerInstances)) {
         if (!isDeepSeekProviderInstance(instance) || !isRecord(instance.config)) continue;
         const secretName = deepSeekApiKeySecretName(instanceId);
@@ -565,6 +637,7 @@ const makeServerSettings = Effect.gen(function* () {
 
       return {
         ...next,
+        providers,
         providerInstances: providerInstances as ServerSettings["providerInstances"],
       };
     });

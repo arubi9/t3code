@@ -53,6 +53,23 @@ describe("mobile model options", () => {
     ]);
   });
 
+  it("uses Pi as the default Pi provider label", () => {
+    const config = {
+      providers: [
+        {
+          instanceId: "pi",
+          driver: "pi",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          models: [{ slug: "default", name: "Default", isCustom: false, capabilities: null }],
+        },
+      ],
+    } as unknown as ServerConfig;
+
+    expect(buildModelOptions(config, null)[0]?.providerLabel).toBe("Pi");
+  });
+
   it("distinguishes same-name OpenCode models without changing their routing", () => {
     const sources = [
       { id: "anthropic", label: "Anthropic" },

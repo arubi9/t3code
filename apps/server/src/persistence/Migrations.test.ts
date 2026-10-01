@@ -4,7 +4,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { runMigrations } from "./Migrations.ts";
 
-it.layer(NodeSqliteClient.layerMemory())("fork migration boundary", (it) => {
+it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("fork migration boundary", (it) => {
   it.effect("rejects v2 state before changing schema or migration records", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

@@ -20,6 +20,7 @@ const mcpSession = {
   providerInstanceId: ProviderInstanceId.make("pi"),
   endpoint: "http://127.0.0.1:43123/mcp",
   authorizationHeader: "Bearer fixture-thread-secret",
+  capabilities: new Set<string>(),
 };
 
 it.effect(

@@ -30,7 +30,7 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { piEnvironmentWithoutT3Mcp } from "./piT3McpInjection.ts";
 
-export class PiRpcError extends Schema.TaggedErrorClass<PiRpcError>()("PiRpcError", {
+export class PiRpcError extends Schema.TaggedError<PiRpcError>()("PiRpcError", {
   operation: Schema.String,
   detail: Schema.optional(Schema.String),
   cause: Schema.optional(Schema.Defect()),

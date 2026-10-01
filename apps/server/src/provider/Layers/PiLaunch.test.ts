@@ -111,6 +111,7 @@ it.live(
             providerInstanceId: ProviderInstanceId.make("pi"),
             endpoint: "http://fixture.invalid/mcp",
             authorizationHeader: "Bearer owner-secret",
+            capabilities: new Set(),
           }),
         ),
         () => Effect.sync(() => clearMcpProviderSession(owner)),

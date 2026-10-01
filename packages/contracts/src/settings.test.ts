@@ -20,6 +20,40 @@ const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 
+describe("response streaming settings", () => {
+  it("defaults to paragraphs and drops legacy opt-ins on decode", () => {
+    expect(DEFAULT_SERVER_SETTINGS.responseStreamingMode).toBe("paragraph");
+    for (const input of [
+      {},
+      { enableLegacyTokenStreaming: true },
+      { enableAssistantStreaming: true },
+    ]) {
+      const settings = decodeServerSettings(input);
+      expect(settings.responseStreamingMode).toBe("paragraph");
+      expect(encodeServerSettings(settings)).not.toHaveProperty("enableLegacyTokenStreaming");
+      expect(encodeServerSettings(settings)).not.toHaveProperty("enableAssistantStreaming");
+    }
+    expect(decodeServerSettingsPatch({ enableLegacyTokenStreaming: true })).toEqual({});
+  });
+
+  it.each(["turn", "paragraph", "token"] as const)(
+    "round-trips %s through snapshots and patches",
+    (mode) => {
+      const patch = decodeServerSettingsPatch({ responseStreamingMode: mode });
+      expect(patch).toEqual({ responseStreamingMode: mode });
+      expect(encodeServerSettings(decodeServerSettings(patch)).responseStreamingMode).toBe(mode);
+    },
+  );
+
+  it.each(["streaming", "buffered", "", true, null])(
+    "rejects invalid mode %j",
+    (responseStreamingMode) => {
+      expect(() => decodeServerSettings({ responseStreamingMode })).toThrow();
+      expect(() => decodeServerSettingsPatch({ responseStreamingMode })).toThrow();
+    },
+  );
+});
+
 describe("ServerSettings usage price overrides", () => {
   const prices = { inputCostPerMillionTokens: 2, outputCostPerMillionTokens: 8 };
 

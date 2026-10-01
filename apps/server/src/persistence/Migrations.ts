@@ -10,6 +10,7 @@
 
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Effect from "effect/Effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -158,6 +159,20 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
+  const sql = yield* SqlClient.SqlClient;
+  // Fork migration IDs overlap upstream; accepting them silently hides all v2 history.
+  const forkState = yield* sql`
+    SELECT name FROM sqlite_master
+    WHERE type = 'table' AND name = 'orchestration_v2_projection_threads'
+  `;
+  if (forkState.length > 0) {
+    return yield* new Migrator.MigrationError({
+      kind: "BadState",
+      message:
+        "This database uses Orchestration V2. This build cannot migrate its history or sessions. " +
+        "Open it with the original Pi fork; do not rename or delete migration records.",
+    });
+  }
   const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0

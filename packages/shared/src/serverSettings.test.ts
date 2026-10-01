@@ -21,6 +21,20 @@ import {
 } from "./serverSettings.ts";
 
 describe("serverSettings helpers", () => {
+  it("updates and resets environment response streaming without changing provider settings", () => {
+    const token = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      responseStreamingMode: "token",
+    });
+    const turn = applyServerSettingsPatch(token, { responseStreamingMode: "turn" });
+    const reset = applyServerSettingsPatch(turn, {
+      responseStreamingMode: DEFAULT_SERVER_SETTINGS.responseStreamingMode,
+    });
+    expect(token.responseStreamingMode).toBe("token");
+    expect(turn.responseStreamingMode).toBe("turn");
+    expect(reset).toEqual(DEFAULT_SERVER_SETTINGS);
+    expect(token.providerInstances).toEqual(DEFAULT_SERVER_SETTINGS.providerInstances);
+  });
+
   it("inherits actions, preserves existing actions, and supports empty overrides and reset", () => {
     const project = { id: ProjectId.make("project-actions"), scripts: [] };
     const action = {

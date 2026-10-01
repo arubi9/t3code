@@ -45,6 +45,7 @@ describe("splitSharedServerPatch", () => {
       continueThreadsAfterServerUpdate: true,
       enableAgentBrowserAccess: false,
       defaultThreadEnvMode: "worktree",
+      responseStreamingMode: "token",
       newWorktreesStartFromOrigin: true,
     });
     expect(sharedPatch).toEqual({
@@ -56,6 +57,7 @@ describe("splitSharedServerPatch", () => {
     expect(localPatch).toEqual({
       enableAgentBrowserAccess: false,
       defaultThreadEnvMode: "worktree",
+      responseStreamingMode: "token",
     });
   });
 });

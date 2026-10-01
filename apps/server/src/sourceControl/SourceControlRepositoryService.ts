@@ -18,6 +18,7 @@ import {
   type SourceControlRepositoryLookupInput,
 } from "@t3tools/contracts";
 
+import { normalizePastedCloneUrl } from "@t3tools/shared/git";
 import { ServerConfig } from "../config.ts";
 import { expandHomePathWith } from "../pathExpansion.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -172,7 +173,7 @@ export const make = Effect.gen(function* () {
   ) {
     const preparedDestination = yield* prepareDestination(input.destinationPath);
     let repository: SourceControlRepositoryInfo | null = null;
-    let remoteUrl = input.remoteUrl?.trim() ?? null;
+    let remoteUrl = input.remoteUrl ? normalizePastedCloneUrl(input.remoteUrl) : null;
     let provider: SourceControlProviderKind = input.provider ?? "unknown";
 
     if (input.provider && input.repository) {
@@ -193,13 +194,32 @@ export const make = Effect.gen(function* () {
       });
     }
 
-    yield* git.execute({
+    const result = yield* git.execute({
       operation: "SourceControlRepositoryService.cloneRepository",
       cwd: preparedDestination.parentPath,
-      args: ["clone", remoteUrl, preparedDestination.directoryName],
+      args: ["clone", "--", remoteUrl, preparedDestination.directoryName],
+      allowNonZeroExit: true,
       timeoutMs: 120_000,
       maxOutputBytes: 256 * 1024,
     });
+    if (result.exitCode !== 0) {
+      // Never send raw Git output to clients: it can contain credentials in URLs.
+      const detail =
+        /authentication failed|could not read Username|permission denied \(publickey\)/i.test(
+          result.stderr,
+        )
+          ? "Authenticate Git on the selected server, then retry cloning. For GitHub, run gh auth login and gh auth setup-git there."
+          : /repository .*not found|does not appear to be a git repository/i.test(result.stderr)
+            ? "Repository not found or inaccessible. Check the full clone URL and the selected server's repository access."
+            : /could not resolve host|failed to connect|connection timed out/i.test(result.stderr)
+              ? "The selected server cannot reach the Git host. Check its network and DNS."
+              : `Git clone failed (exit ${result.exitCode}). Check the clone URL, server credentials, and destination permissions.`;
+      return yield* new SourceControlRepositoryError({
+        operation: "cloneRepository",
+        provider,
+        detail,
+      });
+    }
 
     return {
       cwd: preparedDestination.destinationPath,

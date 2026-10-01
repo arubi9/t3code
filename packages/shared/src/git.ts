@@ -10,6 +10,17 @@ import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 import { detectSourceControlProviderFromRemoteUrl } from "./sourceControl.ts";
 
+const GITHUB_REPOSITORY_SHORTHAND =
+  /^(?:github\.com\/)?[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]+$/;
+
+/** Expand GitHub shorthand without rewriting explicit URLs, SSH remotes or local paths. */
+export function normalizePastedCloneUrl(input: string): string {
+  const trimmed = input.trim();
+  if (!GITHUB_REPOSITORY_SHORTHAND.test(trimmed)) return trimmed;
+  const repository = trimmed.replace(/^github\.com\//, "");
+  return `https://github.com/${repository.endsWith(".git") ? repository : `${repository}.git`}`;
+}
+
 export const WORKTREE_BRANCH_PREFIX = "t3code";
 // Canonical form is `t3code/<8 hex>`. Older mobile builds generated `t3code/<uuid>`
 // via Crypto.randomUUID() (always RFC 4122 v4), so the matcher also accepts exactly

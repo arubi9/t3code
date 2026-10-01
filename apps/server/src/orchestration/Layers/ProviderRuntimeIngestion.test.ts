@@ -55,7 +55,10 @@ import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
-import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
+import {
+  ProviderRuntimeIngestionLive,
+  splitBufferedAssistantText,
+} from "./ProviderRuntimeIngestion.ts";
 import { DEFAULT_THREAD_TITLE } from "../threadTitles.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
@@ -297,7 +300,24 @@ describe("ProviderRuntimeIngestion", () => {
         });
       }),
     ).pipe(Layer.provide(projectionSnapshotLayer));
+    // Controllable wall clock for delivery pacing; worker sleeps stay real.
+    let clockOffsetMs = 0;
+    const realClock = Effect.runSync(Effect.service(Clock.Clock));
+    const startedAtMillis = realClock.currentTimeMillisUnsafe();
+    const shiftedClock: Clock.Clock = {
+      currentTimeMillisUnsafe: () => startedAtMillis + clockOffsetMs,
+      currentTimeMillis: Effect.sync(() => startedAtMillis + clockOffsetMs),
+      currentTimeNanosUnsafe: () =>
+        realClock.currentTimeNanosUnsafe() + BigInt(clockOffsetMs) * 1_000_000n,
+      currentTimeNanos: Effect.sync(
+        () => realClock.currentTimeNanosUnsafe() + BigInt(clockOffsetMs) * 1_000_000n,
+      ),
+      monotonicTimeNanosUnsafe: () => realClock.monotonicTimeNanosUnsafe(),
+      monotonicTimeNanos: realClock.monotonicTimeNanos,
+      sleep: (duration) => realClock.sleep(duration),
+    };
     const layer = ProviderRuntimeIngestionLive.pipe(
+      Layer.provide(Layer.succeed(Clock.Clock, shiftedClock)),
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(ingestionProjectionSnapshotLayer),
       // Single shared liveness instance across ingestion (writer), the
@@ -392,6 +412,9 @@ describe("ProviderRuntimeIngestion", () => {
             .pipe(Effect.map(Option.getOrThrow)),
         ),
       emit: provider.emit,
+      advanceClock: (ms: number) => {
+        clockOffsetMs += ms;
+      },
       emitAndDrain,
       sqlCount: sqlCounter.count,
       setProviderSession: provider.setSession,
@@ -442,11 +465,11 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it.each([
-    { delivery: "buffered", enableLegacyTokenStreaming: false },
-    { delivery: "streamed", enableLegacyTokenStreaming: true },
+    { delivery: "buffered", responseStreamingMode: "paragraph" as const },
+    { delivery: "streamed", responseStreamingMode: "token" as const },
   ])("settles OpenCode aborted turns and saves $delivery assistant text", async (settings) => {
     const harness = await createHarness({
-      serverSettings: { enableLegacyTokenStreaming: settings.enableLegacyTokenStreaming },
+      serverSettings: { responseStreamingMode: settings.responseStreamingMode },
     });
     const threadId = asThreadId("thread-1");
     const turnId = asTurnId("opencode-aborted-turn");
@@ -498,7 +521,7 @@ describe("ProviderRuntimeIngestion", () => {
     "finalizes old buffered text on late %s without stopping the newer turn",
     async (terminalType) => {
       const harness = await createHarness({
-        serverSettings: { enableLegacyTokenStreaming: false },
+        serverSettings: { responseStreamingMode: "paragraph" },
       });
       const threadId = asThreadId("thread-1");
       const oldTurnId = asTurnId("old-buffered-turn");
@@ -582,7 +605,7 @@ describe("ProviderRuntimeIngestion", () => {
     { source: "an unspecified turn", turnId: undefined },
   ])("ignores late OpenCode aborts for $source across newer turns", async (lateAbort) => {
     const harness = await createHarness({
-      serverSettings: { enableLegacyTokenStreaming: true },
+      serverSettings: { responseStreamingMode: "token" },
     });
     const threadId = asThreadId("thread-1");
     const stoppedTurnId = asTurnId("opencode-stopped-turn");
@@ -2689,7 +2712,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("keeps streaming while an async question is pending", async () => {
-    const harness = await createHarness({ serverSettings: { enableLegacyTokenStreaming: true } });
+    const harness = await createHarness({ serverSettings: { responseStreamingMode: "token" } });
     const base = {
       provider: ProviderDriverKind.make("codex"),
       createdAt: "2026-01-01T00:00:00.000Z",
@@ -2931,7 +2954,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("starts a new streaming assistant message segment after approval", async () => {
-    const harness = await createHarness({ serverSettings: { enableLegacyTokenStreaming: true } });
+    const harness = await createHarness({ serverSettings: { responseStreamingMode: "token" } });
     const startedAt = "2026-03-28T07:00:00.000Z";
     const pausedAt = "2026-03-28T07:00:01.000Z";
     const resumedAt = "2026-03-28T07:00:02.000Z";
@@ -3038,7 +3061,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("streams assistant deltas when thread.turn.start requests streaming mode", async () => {
-    const harness = await createHarness({ serverSettings: { enableLegacyTokenStreaming: true } });
+    const harness = await createHarness({ serverSettings: { responseStreamingMode: "token" } });
     const now = "2026-01-01T00:00:00.000Z";
 
     await Effect.runPromise(
@@ -3128,6 +3151,257 @@ describe("ProviderRuntimeIngestion", () => {
     expect(finalMessage?.text).toBe("hello live");
     expect(finalMessage?.streaming).toBe(false);
   });
+
+  it.each(["codex", "pi"])(
+    "%s delivers finished paragraphs and closed fences while buffering the tail",
+    async (driverKind) => {
+      const harness = await createHarness();
+      const base = {
+        provider: ProviderDriverKind.make(driverKind),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-paragraph-flush"),
+        itemId: asItemId("item-paragraph-flush"),
+      };
+      const message = async () =>
+        (await harness.readModel()).threads[0]?.messages.find(
+          (message) => message.id === `assistant:${base.itemId}`,
+        );
+      await harness.emitAndDrain([
+        { ...base, type: "turn.started", eventId: asEventId("paragraph-start") },
+      ]);
+      const emitDelta = async (eventId: string, delta: string) => {
+        harness.advanceClock(1_000);
+        await harness.emitAndDrain([
+          {
+            ...base,
+            type: "content.delta",
+            eventId: asEventId(eventId),
+            payload: { streamKind: "assistant_text", delta },
+          },
+        ]);
+      };
+
+      await emitDelta("paragraph-1", "First paragraph.\n\nSecond para");
+      expect(await message()).toMatchObject({ text: "First paragraph.\n\n", streaming: true });
+      // Blank lines and list-like text inside the open block are not boundaries.
+      await emitDelta("paragraph-2", "graph.\n\n```ts\nconst a = 1;\n\n- still code\n");
+      expect((await message())?.text).toBe("First paragraph.\n\nSecond paragraph.\n\n");
+      await emitDelta("paragraph-3", "```\nTail without newline");
+      const ready =
+        "First paragraph.\n\nSecond paragraph.\n\n```ts\nconst a = 1;\n\n- still code\n```\n";
+      expect(await message()).toMatchObject({ text: ready, streaming: true });
+      await harness.emitAndDrain([
+        {
+          ...base,
+          type: "item.completed",
+          eventId: asEventId("paragraph-completed"),
+          payload: { itemType: "assistant_message", status: "completed" },
+        },
+      ]);
+      expect(await message()).toMatchObject({
+        text: `${ready}Tail without newline`,
+        streaming: false,
+      });
+    },
+  );
+
+  it.each(["turn", "paragraph", "token"] as const)(
+    "Pi uses the shared %s mode and flushes on failed turn completion",
+    async (responseStreamingMode) => {
+      const harness = await createHarness({ serverSettings: { responseStreamingMode } });
+      const base = {
+        provider: ProviderDriverKind.make("pi"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-mode"),
+        itemId: asItemId("item-mode"),
+      };
+      const message = async () =>
+        (await harness.readModel()).threads[0]?.messages.find(
+          (message) => message.id === `assistant:${base.itemId}`,
+        );
+      await harness.emitAndDrain([
+        { ...base, type: "turn.started", eventId: asEventId("mode-start") },
+        {
+          ...base,
+          type: "content.delta",
+          eventId: asEventId("mode-first"),
+          payload: { streamKind: "assistant_text", delta: "```ts\ncode\n" },
+        },
+      ]);
+      expect((await message())?.text).toBe(
+        responseStreamingMode === "token" ? "```ts\ncode\n" : undefined,
+      );
+      await harness.emitAndDrain([
+        {
+          ...base,
+          type: "content.delta",
+          eventId: asEventId("mode-second"),
+          payload: { streamKind: "assistant_text", delta: "```\n\nTail" },
+        },
+      ]);
+      expect((await message())?.text).toBe(
+        responseStreamingMode === "turn"
+          ? undefined
+          : responseStreamingMode === "paragraph"
+            ? "```ts\ncode\n```\n\n"
+            : "```ts\ncode\n```\n\nTail",
+      );
+      // No clock advance: finalization must bypass paragraph pacing.
+      await harness.emitAndDrain([
+        {
+          ...base,
+          type: "turn.completed",
+          eventId: asEventId("mode-failed"),
+          payload: { state: "failed", errorMessage: "Provider failed" },
+        },
+      ]);
+      expect(await message()).toMatchObject({ text: "```ts\ncode\n```\n\nTail", streaming: false });
+    },
+  );
+
+  it.each(["turn", "paragraph"] as const)(
+    "flushes paced paragraphs and the unfinished tail before Pi approval in %s mode",
+    async (responseStreamingMode) => {
+      const harness = await createHarness({ serverSettings: { responseStreamingMode } });
+      const base = {
+        provider: ProviderDriverKind.make("pi"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-pause"),
+        itemId: asItemId("item-pause"),
+      };
+      await harness.emitAndDrain([
+        { ...base, type: "turn.started", eventId: asEventId("pause-start") },
+        {
+          ...base,
+          type: "content.delta",
+          eventId: asEventId("pause-first"),
+          payload: { streamKind: "assistant_text", delta: "One.\n\n" },
+        },
+        {
+          ...base,
+          type: "content.delta",
+          eventId: asEventId("pause-second"),
+          payload: { streamKind: "assistant_text", delta: "Two.\n\nTail" },
+        },
+        {
+          ...base,
+          type: "request.opened",
+          eventId: asEventId("pause-approval"),
+          requestId: ApprovalRequestId.make("pause-request"),
+          payload: { requestType: "command_execution_approval", detail: "Approve command" },
+        },
+      ]);
+      expect((await harness.readModel()).threads[0]?.messages).toMatchObject([
+        { id: `assistant:${base.itemId}`, text: "One.\n\nTwo.\n\nTail", streaming: false },
+      ]);
+    },
+  );
+
+  it.each(["codex", "pi"])(
+    "%s paces on the server clock and only releases on a later delta at 400ms",
+    async (driverKind) => {
+      const harness = await createHarness();
+      // All provider timestamps are identical, as with OpenCode part deltas.
+      const base = {
+        provider: ProviderDriverKind.make(driverKind),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-paced"),
+        itemId: asItemId("item-paced"),
+      };
+      await harness.emitAndDrain([
+        { ...base, type: "turn.started", eventId: asEventId("paced-start") },
+      ]);
+      let clockMs = 0;
+      const emitDelta = async (delta: string, offsetMs: number) => {
+        harness.advanceClock(offsetMs - clockMs);
+        clockMs = offsetMs;
+        await harness.emitAndDrain([
+          {
+            ...base,
+            type: "content.delta",
+            eventId: asEventId(`paced-${offsetMs}`),
+            payload: { streamKind: "assistant_text", delta },
+          },
+        ]);
+      };
+      const messageText = async () =>
+        (await harness.readModel()).threads[0]?.messages.find(
+          (message) => message.id === `assistant:${base.itemId}`,
+        )?.text;
+      await emitDelta("One.\n\n", 0);
+      expect(await messageText()).toBe("One.\n\n");
+      await emitDelta("Two.\n\n", 100);
+      await emitDelta("Three.\n\n", 399);
+      expect(await messageText()).toBe("One.\n\n");
+      harness.advanceClock(1);
+      clockMs = 400;
+      await harness.drain();
+      expect(await messageText()).toBe("One.\n\n");
+      await emitDelta("Tail", 400);
+      expect(await messageText()).toBe("One.\n\nTwo.\n\nThree.\n\n");
+      await emitDelta(".\n\n", 799);
+      expect(await messageText()).toBe("One.\n\nTwo.\n\nThree.\n\n");
+      await emitDelta("next", 800);
+      expect(await messageText()).toBe("One.\n\nTwo.\n\nThree.\n\nTail.\n\n");
+    },
+  );
+
+  it.each(["turn", "paragraph"] as const)(
+    "spills only above 24000 characters in %s mode and still finalizes the tail",
+    async (responseStreamingMode) => {
+      const harness = await createHarness({ serverSettings: { responseStreamingMode } });
+      const base = {
+        provider: ProviderDriverKind.make("pi"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-limit"),
+        itemId: asItemId("item-limit"),
+      };
+      const message = async () =>
+        (await harness.readModel()).threads[0]?.messages.find(
+          (message) => message.id === `assistant:${base.itemId}`,
+        );
+      const text = "x".repeat(24_000);
+      await harness.emitAndDrain([
+        { ...base, type: "turn.started", eventId: asEventId("limit-start") },
+        {
+          ...base,
+          type: "content.delta",
+          eventId: asEventId("limit-first"),
+          payload: { streamKind: "assistant_text", delta: text },
+        },
+      ]);
+      expect(await message()).toBeUndefined();
+      await harness.emitAndDrain([
+        {
+          ...base,
+          type: "content.delta",
+          eventId: asEventId("limit-spill"),
+          payload: { streamKind: "assistant_text", delta: "y" },
+        },
+      ]);
+      expect(await message()).toMatchObject({ text: `${text}y`, streaming: true });
+      await harness.emitAndDrain([
+        {
+          ...base,
+          type: "content.delta",
+          eventId: asEventId("limit-tail"),
+          payload: { streamKind: "assistant_text", delta: "tail" },
+        },
+        {
+          ...base,
+          type: "item.completed",
+          eventId: asEventId("limit-completed"),
+          payload: { itemType: "assistant_message", status: "completed" },
+        },
+      ]);
+      expect(await message()).toMatchObject({ text: `${text}ytail`, streaming: false });
+    },
+  );
 
   it("spills oversized buffered deltas and still finalizes full assistant text", async () => {
     const harness = await createHarness();
@@ -4365,5 +4639,114 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("runtime still processed");
+  });
+});
+
+describe("splitBufferedAssistantText", () => {
+  it("keeps a partial trailing line buffered", () => {
+    expect(splitBufferedAssistantText("one\n\ntwo")).toEqual({ ready: "one\n\n", rest: "two" });
+    expect(splitBufferedAssistantText("one\ntwo")).toEqual({ ready: "", rest: "one\ntwo" });
+  });
+
+  it("does not split inside an open fence and delivers the block at its closing fence", () => {
+    const open = "intro\n\n```\ncode\n\nmore\n";
+    expect(splitBufferedAssistantText(open)).toEqual({
+      ready: "intro\n\n",
+      rest: "```\ncode\n\nmore\n",
+    });
+    expect(splitBufferedAssistantText(`${open}\`\`\`\nafter`)).toEqual({
+      ready: `${open}\`\`\`\n`,
+      rest: "after",
+    });
+  });
+
+  it("does not treat a fence with an info string as a closing fence", () => {
+    const text = "```\n```javascript\nstill code\n\nmore\n";
+    expect(splitBufferedAssistantText(text)).toEqual({ ready: "", rest: text });
+  });
+
+  it("treats a fence indented four or more spaces as code, not a closing fence", () => {
+    const text = "```\n    ```\n\nstill code\n";
+    expect(splitBufferedAssistantText(text)).toEqual({ ready: "", rest: text });
+    expect(splitBufferedAssistantText("```\n   ```\nafter")).toEqual({
+      ready: "```\n   ```\n",
+      rest: "after",
+    });
+  });
+
+  it("keeps a fence nested under a list item open across its blank lines", () => {
+    const text = "- step\n\n    ```ts\n    a\n\n    b\n    ```\n\nafter\n";
+    expect(splitBufferedAssistantText(text)).toEqual({
+      ready: "- step\n\n    ```ts\n    a\n\n    b\n    ```\n\n",
+      rest: "after\n",
+    });
+  });
+
+  it("does not treat a no-break-space line as blank", () => {
+    expect(splitBufferedAssistantText("para\n\u00a0\ncont\n\nnext")).toEqual({
+      ready: "para\n\u00a0\ncont\n\n",
+      rest: "next",
+    });
+  });
+
+  it("treats CRLF blank lines as boundaries", () => {
+    expect(splitBufferedAssistantText("one\r\n\r\ntwo")).toEqual({
+      ready: "one\r\n\r\n",
+      rest: "two",
+    });
+  });
+
+  it("only closes a fence with the same marker of equal or greater length", () => {
+    const text = "````\n```\nstill code\n\n````\n\nout\n";
+    expect(splitBufferedAssistantText(text)).toEqual({
+      ready: "````\n```\nstill code\n\n````\n\n",
+      rest: "out\n",
+    });
+    expect(splitBufferedAssistantText("~~~\n```\n\nx\n")).toEqual({
+      ready: "",
+      rest: "~~~\n```\n\nx\n",
+    });
+  });
+
+  it("delivers tight list items one at a time", () => {
+    expect(splitBufferedAssistantText("## Steps\n\n- one\n- two\n- thr")).toEqual({
+      ready: "## Steps\n\n- one\n- two\n",
+      rest: "- thr",
+    });
+    expect(splitBufferedAssistantText("1. one\n2. two\n   more\n3. t")).toEqual({
+      ready: "1. one\n2. two\n   more\n",
+      rest: "3. t",
+    });
+  });
+
+  it("releases nested and ordered items only when the next item has content", () => {
+    expect(splitBufferedAssistantText("- parent\n  - child\n  - next")).toEqual({
+      ready: "- parent\n  - child\n",
+      rest: "  - next",
+    });
+    expect(splitBufferedAssistantText("1) first\n   continued\n2) next")).toEqual({
+      ready: "1) first\n   continued\n",
+      rest: "2) next",
+    });
+    expect(splitBufferedAssistantText("- first\n- ")).toEqual({ ready: "", rest: "- first\n- " });
+    const fenced = "- parent\n    ```ts\n    - not a list\n    2) still code\n\n";
+    expect(splitBufferedAssistantText(fenced)).toEqual({ ready: "", rest: fenced });
+    expect(splitBufferedAssistantText(`${fenced}    \`\`\`\n- next`)).toEqual({
+      ready: `${fenced}    \`\`\`\n`,
+      rest: "- next",
+    });
+  });
+
+  it("keeps a partial list marker and list-like code buffered", () => {
+    expect(splitBufferedAssistantText("intro\n-")).toEqual({ ready: "", rest: "intro\n-" });
+    expect(splitBufferedAssistantText("intro\n1.")).toEqual({ ready: "", rest: "intro\n1." });
+    // `intro\n- \n` would parse as a setext heading, so a bare marker with only
+    // trailing whitespace is not a boundary on the partial line either.
+    expect(splitBufferedAssistantText("intro\n- ")).toEqual({ ready: "", rest: "intro\n- " });
+    expect(splitBufferedAssistantText("- one\n")).toEqual({ ready: "", rest: "- one\n" });
+    expect(splitBufferedAssistantText("```\n- one\n- two\n")).toEqual({
+      ready: "",
+      rest: "```\n- one\n- two\n",
+    });
   });
 });

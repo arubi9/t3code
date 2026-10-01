@@ -58,6 +58,12 @@ describe("add project shared logic", () => {
   });
 
   it("keeps explicit clone URLs and local paths unchanged", () => {
+    expect(normalizePastedCloneUrl(" github.com/arubi9/lamdin.git ")).toBe(
+      "https://github.com/arubi9/lamdin.git",
+    );
+    expect(normalizePastedCloneUrl("github.com/arubi9/lamdin")).toBe(
+      "https://github.com/arubi9/lamdin.git",
+    );
     expect(normalizePastedCloneUrl("https://gitlab.com/group/project.git")).toBe(
       "https://gitlab.com/group/project.git",
     );

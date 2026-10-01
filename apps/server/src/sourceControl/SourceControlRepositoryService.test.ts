@@ -178,7 +178,7 @@ it.effect("clones a looked-up repository into the requested destination", () =>
       assert.deepStrictEqual(cloneCalls, [
         {
           cwd: parent,
-          args: ["clone", CLONE_URLS.url, "t3code"],
+          args: ["clone", "--", CLONE_URLS.url, "t3code"],
         },
       ]);
     }).pipe(
@@ -195,6 +195,69 @@ it.effect("clones a looked-up repository into the requested destination", () =>
       ),
     );
   }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("normalizes bare GitHub URLs from older clients at the server boundary", () =>
+  Effect.gen(function* () {
+    const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+    const result = yield* service.cloneRepository({
+      remoteUrl: "github.com/arubi9/lamdin.git",
+      destinationPath: "/tmp/lamdin",
+    });
+    assert.equal(result.remoteUrl, "https://github.com/arubi9/lamdin.git");
+  }).pipe(
+    Effect.provide(
+      makeLayer({
+        fileSystem: FileSystem.makeNoop({
+          exists: () => Effect.succeed(false),
+          makeDirectory: () => Effect.void,
+        }),
+        git: {
+          execute: (input) => {
+            assert.deepEqual(input.args, [
+              "clone",
+              "--",
+              "https://github.com/arubi9/lamdin.git",
+              "lamdin",
+            ]);
+            return Effect.succeed(processOutput());
+          },
+        },
+      }),
+    ),
+  ),
+);
+
+it.effect("reports authentication failures without leaking Git output credentials", () =>
+  Effect.gen(function* () {
+    const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+    const error = yield* Effect.flip(
+      service.cloneRepository({
+        remoteUrl: "https://github.com/arubi9/lamdin.git",
+        destinationPath: "/tmp/lamdin",
+      }),
+    );
+    assert.include(error.detail, "Authenticate Git on the selected server");
+    assert.notInclude(error.message, "secret-token");
+  }).pipe(
+    Effect.provide(
+      makeLayer({
+        fileSystem: FileSystem.makeNoop({
+          exists: () => Effect.succeed(false),
+          makeDirectory: () => Effect.void,
+        }),
+        git: {
+          execute: () =>
+            Effect.succeed({
+              ...processOutput(),
+              exitCode: ChildProcessSpawner.ExitCode(128),
+              stderr:
+                "fatal: could not read Username for 'https://secret-token@github.com': terminal prompts disabled",
+            }),
+        },
+      }),
+    ),
+  ),
 );
 
 it.effect("preserves destination probe failures instead of treating them as missing paths", () => {

@@ -106,16 +106,7 @@ export function addProjectRemoteSourceProvider(
   return source === "url" ? null : source;
 }
 
-const GITHUB_REPOSITORY_SHORTHAND =
-  /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]+(?:\.git)?$/;
-
-/** Treat the common owner/repository shorthand as a public GitHub HTTPS URL. */
-export function normalizePastedCloneUrl(input: string): string {
-  const trimmed = input.trim();
-  if (!GITHUB_REPOSITORY_SHORTHAND.test(trimmed)) return trimmed;
-  const repository = trimmed.endsWith(".git") ? trimmed : `${trimmed}.git`;
-  return `https://github.com/${repository}`;
-}
+export { normalizePastedCloneUrl } from "@t3tools/shared/git";
 
 /** GitHub defaults to HTTPS; other providers retain their existing SSH default. */
 export function getDefaultCloneUrl(

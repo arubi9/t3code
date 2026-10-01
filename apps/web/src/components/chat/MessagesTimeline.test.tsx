@@ -671,6 +671,99 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("<a href=");
   });
 
+  it.each([false, true])(
+    "snaps on mount and thread remount, then follows running turns with reduced motion=%s",
+    async (reducedMotion) => {
+      const frames = new Map<number, FrameRequestCallback>();
+      let nextFrame = 0;
+      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+        frames.set(++nextFrame, callback);
+        return nextFrame;
+      });
+      vi.stubGlobal("cancelAnimationFrame", (frame: number) => frames.delete(frame));
+      vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+      const mediaQuery = vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
+        matches: query === "(prefers-reduced-motion: reduce)" && reducedMotion,
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => true,
+      }));
+      const flushFrame = () =>
+        act(() => {
+          const callbacks = [...frames.values()];
+          frames.clear();
+          callbacks.forEach((callback) => callback(0));
+        });
+      // Work rows avoid unrelated message DOM effects in react-test-renderer.
+      const entries = [
+        {
+          id: "entry-settle-work",
+          kind: "work" as const,
+          createdAt: MESSAGE_CREATED_AT,
+          entry: {
+            id: "work-settle",
+            createdAt: MESSAGE_CREATED_AT,
+            toolCallId: "call-settle",
+            label: "Run lint",
+            tone: "tool" as const,
+            itemType: "command_execution" as const,
+            command: "pnpm lint",
+            toolLifecycleStatus: "completed" as const,
+          },
+        },
+      ];
+      let renderer: ReactTestRenderer | undefined;
+      const scrollPolicy = () => renderer!.root.findByProps({ "data-testid": "legend-list" }).props;
+      const renderThread = (key: string, isWorking = true, liveFollowEnabled = true) => (
+        <MessagesTimeline
+          {...buildProps()}
+          key={key}
+          routeThreadKey={`env-1:${key}`}
+          isWorking={isWorking}
+          liveFollowEnabled={liveFollowEnabled}
+          timelineEntries={entries}
+        />
+      );
+      try {
+        await act(() => {
+          renderer = create(renderThread("thread-a"));
+        });
+        expect(scrollPolicy()["data-maintain-scroll-at-end-animated"]).toBe(false);
+        await flushFrame();
+        expect(scrollPolicy()["data-maintain-scroll-at-end-animated"]).toBe(false);
+        await flushFrame();
+        expect(scrollPolicy()["data-maintain-scroll-at-end-animated"]).toBe(!reducedMotion);
+
+        await act(() => renderer!.update(renderThread("thread-a", false)));
+        expect(scrollPolicy()["data-maintain-scroll-at-end-animated"]).toBe(false);
+        await act(() => renderer!.update(renderThread("thread-a", true, false)));
+        expect(scrollPolicy()["data-maintain-scroll-at-end"]).toBeUndefined();
+        await act(() => renderer!.update(renderThread("thread-a")));
+        expect(scrollPolicy()["data-maintain-scroll-at-end-animated"]).toBe(!reducedMotion);
+
+        // ChatView switches threads by remounting, not by retaining list identity.
+        await act(() => renderer!.update(renderThread("thread-b")));
+        expect(scrollPolicy()["data-maintain-scroll-at-end-animated"]).toBe(false);
+        await flushFrame();
+        await flushFrame();
+        expect(scrollPolicy()["data-maintain-scroll-at-end-animated"]).toBe(!reducedMotion);
+
+        await act(() => renderer!.update(renderThread("thread-c")));
+        await flushFrame();
+        await act(() => renderer!.unmount());
+        renderer = undefined;
+        expect(frames.size).toBe(0);
+      } finally {
+        await act(() => renderer?.unmount());
+        mediaQuery.mockRestore();
+      }
+    },
+  );
+
   it("keeps reserved end space when tool work starts while reading history", () => {
     const turnId = TurnId.make("turn-with-active-tool");
     const firstEntry = buildUserTimelineEntry("Run the command.");

@@ -111,6 +111,22 @@ describe("searchSettings", () => {
     },
   );
 
+  it.each(["response streaming", "paragraph", "token", "buffered", "wait turn"])(
+    "finds response streaming by %s without a legacy-only target",
+    (query) => {
+      expect(searchSettings(query)[0]).toMatchObject({
+        id: "response-streaming",
+        title: "Response streaming",
+        to: "/settings/general",
+      });
+      expect(searchableSetting("response-streaming")).toEqual({
+        id: "response-streaming",
+        title: "Response streaming",
+      });
+      expect(SETTINGS_SEARCH_ITEMS.map((item) => item.id)).not.toContain("legacy-token-streaming");
+    },
+  );
+
   it("returns no results for an empty query", () => {
     expect(searchSettings("   ", ITEMS)).toEqual([]);
   });

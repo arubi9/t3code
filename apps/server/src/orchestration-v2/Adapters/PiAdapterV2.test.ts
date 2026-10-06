@@ -502,8 +502,12 @@ describe("PiAdapterV2", () => {
       const extensions = spawn.args.flatMap((arg, index) =>
         arg === "--extension" ? [spawn.args[index + 1]] : [],
       );
-      assert.isFalse(spawn.args.includes("--no-extensions"));
+      // The T3 subagent override replaces Pi's discovery so only one
+      // `subagent` tool registers.
+      assert.isTrue(spawn.args.includes("--no-extensions"));
+      assert.isTrue(extensions.some((path) => path?.endsWith("pi-t3-subagent-extension.ts")));
       assert.isTrue(extensions.some((path) => path?.endsWith("pi-t3-mcp-extension.ts")));
+      assert.equal(spawn.env.T3_PI_MCP_EXTENSION_PATH?.endsWith("pi-t3-mcp-extension.ts"), true);
       assert.equal(spawn.env.T3_MCP_URL, "http://127.0.0.1:43123/mcp");
       assert.equal(spawn.env.T3_MCP_BEARER_TOKEN, "secret-pi-token");
       assert.equal(spawn.env.T3_PI_RUNTIME_MODE, "full-access");

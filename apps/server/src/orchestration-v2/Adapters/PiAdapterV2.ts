@@ -90,7 +90,9 @@ import {
 } from "./PiRpc.ts";
 import {
   buildPiRpcLaunch,
+  discoverPiUserExtensions,
   materializePiT3McpExtension,
+  materializePiT3SubagentExtension,
   resolvePiLaunchArgs,
 } from "./piT3McpInjection.ts";
 import { PI_FILE_CHANGE_TOOLS } from "./piT3McpExtensionSource.ts";
@@ -409,6 +411,12 @@ export function makePiAdapterV2(
       const extensionPath = yield* provideCacheFs(
         materializePiT3McpExtension(options.serverConfig.providerStatusCacheDir),
       );
+      const subagentExtensionPath = yield* provideCacheFs(
+        materializePiT3SubagentExtension(options.serverConfig.providerStatusCacheDir),
+      );
+      const discoveredExtensionPaths = yield* provideCacheFs(
+        discoverPiUserExtensions({ environment: options.environment, cwd }),
+      );
       const resolvedLaunchArgs = resolvePiLaunchArgs(options.settings.launchArgs);
       if (!resolvedLaunchArgs.ok) {
         return yield* protocolError(resolvedLaunchArgs.message);
@@ -418,6 +426,8 @@ export function makePiAdapterV2(
         environment: options.environment,
         mcpSession,
         extensionPath,
+        subagentExtensionPath,
+        discoveredExtensionPaths,
         runtimeMode: input.runtimePolicy.runtimeMode,
       });
       const connection: PiRpcConnection = yield* makePiRpcConnection({
